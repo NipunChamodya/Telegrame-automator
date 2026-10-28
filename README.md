@@ -263,7 +263,17 @@ For more: [User guide](docs/USER_GUIDE.md) · [CLI guide](docs/CLI_GUIDE.md) · 
 
 Bug reports, reproducible UI issues, documentation improvements, and well-scoped contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). **Never include phone numbers, API hashes, session files, private chats, or account databases in an issue.**
 
-**License:** Not yet specified. Until a license is added, public repository visibility does not grant open-source reuse rights.
+
+## 📄 License
+
+Copyright © 2026 Nipun Chamodya Karunarathna.
+
+This project is licensed under the MIT License.
+See the [LICENSE](LICENSE) file for details.
+
+Unofficial Telegram Manager is an independent
+third-party application and is not affiliated
+with or endorsed by Telegram.
 
 ---
 
