@@ -1,5 +1,6 @@
 """Beginner-friendly terminal guidance; no network access without browser consent."""
 import webbrowser
+from .terminal import print, input
 
 PORTAL = "https://my.telegram.org"
 
@@ -87,14 +88,17 @@ def show_help() -> None:
           "  python3 main.py again. Expired authorization requests a new login;\n"
           "  do not delete your session or database to fix a connection problem.\n\n"
           "GROUP DISCOVERY AND POSTING PERMISSIONS\n"
-          "  Option 1 refreshes your joined groups using Telegram's supported API.\n"
-          "  It saves snapshots without posting anything. Option 3 searches them;\n"
-          "  option 4 checks a group's current permissions.\n"
+          "  Option 1 performs a lightweight dialog scan without per-group lookups.\n"
+          "  Option 12 inspects pending/expired metadata sequentially, skipping fresh\n"
+          "  cache entries. Option 3 searches paginated lists; n/p change pages, f\n"
+          "  filters status, and s sorts. Option 4 freshly inspects one explicit group.\n"
+          "  Metadata has separate freshness periods; stale permissions show Unknown.\n"
           "  Allowed means Telegram reports text posting permission. Denied may\n"
           "  mean an admin muted you, membership ended, or the account is restricted.\n"
           "  Unknown means the app cannot verify permission and will block sending.\n"
           "  Unsupported forum topics are blocked. Human rules and moderation bot\n"
-          "  policies may be unknown even when Telegram allows posting.\n\n"
+          "  policies may be unknown even when Telegram allows posting. Technical\n"
+          "  permission to post is not permission to advertise or send unsolicited content.\n\n"
           "MESSAGES AND TELEGRAM RATE LIMITS\n"
           "  Compose with option 5, select one group with option 6, then use option 7\n"
           "  to preview and confirm the exact message and destination. Nothing sends\n"

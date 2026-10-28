@@ -6,6 +6,7 @@ import re
 import sys
 import warnings
 from pathlib import Path
+from .terminal import print, input, TerminalOutputError
 
 from telethon import errors
 
@@ -44,6 +45,8 @@ def hidden(prompt: str) -> str:
         warnings.simplefilter("error", getpass.GetPassWarning)
         try:
             return getpass.getpass(prompt)
+        except BrokenPipeError:
+            raise TerminalOutputError('Secure terminal input is unavailable.') from None
         except getpass.GetPassWarning:
             raise ValueError("Hidden input is unavailable; use a normal terminal.") from None
 

@@ -17,7 +17,7 @@ from telethon import errors
 from telegram_manager.application import startup
 from telegram_manager.configuration import Credentials, bind_account, load_configuration
 from telegram_manager.dashboard import Dashboard
-from telegram_manager.models import Group
+from telegram_manager.models import Group, now
 from telegram_manager.setup_wizard import authenticate, credential_wizard, hidden
 from telegram_manager.storage import Store
 
@@ -166,7 +166,7 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
         self.store = Store(self.root / 'manager.sqlite3')
-        self.group = Group(-1, 'Test', 'group', permission='allowed')
+        self.group = Group(-1, 'Test', 'group', permission='allowed', permissions_checked_at=now())
         self.store.save_group(1, self.group)
         self.service = NS(store=self.store, me=NS(id=1), client=AsyncMock(),
                           inspect=AsyncMock(return_value=self.group), discover=AsyncMock(return_value=1),

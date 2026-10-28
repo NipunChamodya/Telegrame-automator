@@ -9,6 +9,7 @@ import sys
 import tomllib
 import venv
 from pathlib import Path
+from .terminal import print, input
 
 PROJECT = Path(__file__).resolve().parents[2]
 

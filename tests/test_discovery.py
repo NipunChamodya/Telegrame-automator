@@ -64,12 +64,18 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.client = AsyncMock()
         self.me = NS(id=10, restricted=False)
         self.service = TelegramService(self.client, self.store, self.me)
+        self.service.request_interval = 0
         self.entities = [chat()]
-        self.client.get_entity.side_effect = lambda entity: entity
+        self.client.get_entity.side_effect = lambda entity: next(
+            (e for e in self.entities if utils.get_peer_id(e) == entity), entity) if isinstance(entity, int) else entity
         self.client.get_permissions.side_effect = lambda entity, me: participant(entity)
-        self.client.side_effect = lambda request: full_chat(
-            next(e for e in self.entities if e.id == (
-                request.chat_id if isinstance(request, functions.messages.GetFullChatRequest) else request.channel.id)))
+        def response(request):
+            entity = next(e for e in self.entities if e.id == (
+                request.chat_id if isinstance(request, functions.messages.GetFullChatRequest) else request.channel.id))
+            if isinstance(request, functions.channels.GetParticipantRequest):
+                return NS(participant=participant(entity).participant)
+            return full_chat(entity)
+        self.client.side_effect = response
         # Request.channel is the entity before serialization; no socket is used.
         async def dialogs(**kwargs):
             for entity in self.entities:
@@ -84,7 +90,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         permissions = participant(chat())
         self.assertFalse(hasattr(permissions, 'send_messages'))
         self.assertEqual(analyze(chat(), permissions, self.me)[0], 'allowed')
-        self.assertEqual(await self.service.discover(), 1)
+        self.assertEqual(await self.service.discover(detailed=True), 1)
         self.assertEqual(self.store.groups(10)[0]['permission'], 'allowed')
 
     async def test_groups_archives_filters_and_duplicate_dialogs(self):
@@ -92,18 +98,18 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         broadcast = types.Channel(id=3, title='Broadcast', photo=types.ChatPhotoEmpty(), date=None, broadcast=True)
         migrated = chat(4, migrated_to=types.InputChannel(channel_id=2, access_hash=0))
         self.entities = [basic, supergroup, broadcast, migrated, chat(5, left=True), basic, types.User(id=6)]
-        self.assertEqual(await self.service.discover(), 2)
+        self.assertEqual(await self.service.discover(detailed=True), 2)
         self.client.iter_dialogs.assert_called_once_with(ignore_migrated=True)
         groups = self.store.groups(10)
         self.assertEqual({g['kind'] for g in groups}, {'group', 'supergroup'})
         self.assertEqual({g['id'] for g in groups}, {utils.get_peer_id(basic), utils.get_peer_id(supergroup)})
         self.assertTrue(all(g['permission'] == 'allowed' for g in groups))
         self.assertEqual(self.store.groups(99), [])
-        await self.service.discover()
+        await self.service.discover(detailed=True)
         self.assertEqual(len(self.store.groups(10)), 2)
         self.client.send_message.assert_not_called()
         self.assertTrue(all(isinstance(c.args[0], (functions.messages.GetFullChatRequest,
-                                                  functions.channels.GetFullChannelRequest))
+                                                  functions.channels.GetFullChannelRequest, functions.channels.GetParticipantRequest))
                             for c in self.client.call_args_list))
 
     async def test_missing_optional_metadata(self):
@@ -111,8 +117,9 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         entity.participants_count = None
         self.entities = [entity]
         self.client.return_value = None
-        self.client.side_effect = lambda request: NS(full_chat=NS(bot_info=[NS(), types.BotInfo(user_id=123)]))
-        self.assertEqual(await self.service.discover(), 1)
+        self.client.side_effect = lambda request: NS(participant=participant(entity).participant) if isinstance(
+            request, functions.channels.GetParticipantRequest) else NS(full_chat=NS(bot_info=[NS(), types.BotInfo(user_id=123)]))
+        self.assertEqual(await self.service.discover(detailed=True), 1)
         result = self.store.groups(10)[0]
         self.assertIsNone(result['members'])
         self.assertIsNone(result['slowmode_seconds'])
@@ -122,7 +129,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_full_chat_object_is_unknown(self):
         self.client.side_effect = lambda request: NS()
-        await self.service.discover()
+        await self.service.discover(detailed=True)
         result = self.store.groups(10)[0]
         self.assertEqual(result['name'], 'Basic 1')
         self.assertEqual(result['metadata_status'], 'partial')
@@ -136,8 +143,9 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         full.full_chat.slowmode_seconds = 30
         full.full_chat.slowmode_next_send_date = datetime.fromtimestamp(2000000000, timezone.utc)
         full.full_chat.bot_info = [types.BotInfo(user_id=123)]
-        self.client.side_effect = lambda request: full
-        await self.service.discover()
+        self.client.side_effect = lambda request: NS(participant=participant(entity).participant) if isinstance(
+            request, functions.channels.GetParticipantRequest) else full
+        await self.service.discover(detailed=True)
         result = self.store.groups(10)[0]
         self.assertEqual(result['slowmode_seconds'], 30)
         self.assertEqual(result['slowmode_next_send'], 2000000000)
@@ -157,22 +165,22 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_inaccessible_dialogs_preserved_but_denied(self):
         self.entities = [types.ChatForbidden(id=1, title='Inaccessible'),
                          types.ChannelForbidden(id=2, access_hash=0, title='Private', megagroup=True)]
-        self.assertEqual(await self.service.discover(), 2)
+        self.assertEqual(await self.service.discover(detailed=True), 2)
         self.assertTrue(all(g['permission'] == 'denied' for g in self.store.groups(10)))
         self.client.get_entity.assert_not_called()
         self.client.get_permissions.assert_not_called()
 
     async def test_one_group_permission_failure_does_not_stop_following_groups(self):
         self.entities = [chat(), chat(2)]
-        self.client.get_permissions.side_effect = [errors.ChatAdminRequiredError(None), participant(chat(2))]
-        self.assertEqual(await self.service.discover(), 2)
+        self.client.side_effect = [errors.ChatAdminRequiredError(None), full_chat(chat(2))]
+        self.assertEqual(await self.service.discover(detailed=True), 2)
         results = self.store.groups(10)
         self.assertEqual([g['permission'] for g in results], ['unknown', 'allowed'])
 
     async def test_entity_lookup_failure_preserves_basic_record(self):
         self.entities = [chat(), chat(2)]
         self.client.get_entity.side_effect = [errors.ChannelPrivateError(None), chat(2)]
-        self.assertEqual(await self.service.discover(), 2)
+        self.assertEqual(await self.service.discover(detailed=True), 2)
         self.assertEqual([g['permission'] for g in self.store.groups(10)], ['denied', 'allowed'])
 
     async def test_malformed_group_reports_programming_error_and_continues(self):
@@ -180,7 +188,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         # A malformed API response causes a TypeError while iterating bot metadata.
         self.client.side_effect = [NS(full_chat=NS(bot_info=1)), full_chat(chat(2))]
         with self.assertLogs('telegram_manager.discovery', level='ERROR') as logs:
-            self.assertEqual(await self.service.discover(), 2)
+            self.assertEqual(await self.service.discover(detailed=True), 2)
         self.assertIn('ProgrammingError:TypeError', ''.join(logs.output))
         results = self.store.groups(10)
         self.assertEqual(results[0]['permission'], 'unknown')
@@ -191,8 +199,8 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.entities = [chat(), chat(2), chat(3)]
         self.client.side_effect = [full_chat(chat()), errors.FloodWaitError(None, capture=60)]
         with self.assertRaises(errors.FloodWaitError):
-            await self.service.discover()
-        self.assertEqual(len(self.store.groups(10)), 2)
+            await self.service.discover(detailed=True)
+        self.assertEqual(len(self.store.groups(10)), 3)
         self.assertGreater(self.store.cooldown(10), 0)
         self.assertEqual(self.client.call_count, 2)
 
@@ -202,19 +210,19 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
             raise ConnectionError('private-network-details')
         self.client.iter_dialogs.side_effect = interrupted
         with self.assertRaises(ConnectionError):
-            await self.service.discover()
+            await self.service.discover(detailed=True)
         self.assertEqual(len(self.store.groups(10)), 1)
 
     async def test_database_failure_is_not_swallowed_as_group_metadata_failure(self):
         with patch.object(self.store, 'save_group', side_effect=sqlite3.OperationalError('private-db-path')):
             with self.assertRaises(sqlite3.OperationalError):
-                await self.service.discover()
+                await self.service.discover(detailed=True)
 
     async def test_full_metadata_error_keeps_base_and_permissions(self):
         self.client.side_effect = errors.ChatAdminRequiredError(None)
-        await self.service.discover()
+        await self.service.discover(detailed=True)
         result = self.store.groups(10)[0]
-        self.assertEqual(result['permission'], 'allowed')
+        self.assertEqual(result['permission'], 'unknown')
         self.assertEqual(result['metadata_status'], 'partial')
         self.assertIsNone(result['slowmode_seconds'])
 
@@ -227,7 +235,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Discovery completed.', output.getvalue())
         self.assertIn('Total groups: 2', output.getvalue())
         self.assertIn('Groups discovered: 2', output.getvalue())
-        self.assertIn('Posting allowed: 2', output.getvalue())
+        self.assertIn('Posting unknown: 2', output.getvalue())
         self.assertIn('Goodbye', output.getvalue())
         self.assertEqual(len(self.store.groups(10)), 2)
         self.client.send_message.assert_not_called()
@@ -239,7 +247,7 @@ class DiscoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await discover_with_output(self.service), 2)
         self.assertIn('[1]', output.getvalue())
         self.assertIn('Total groups: 2', output.getvalue())
-        self.assertIn('Posting allowed: 2', output.getvalue())
+        self.assertIn('Posting unknown: 2', output.getvalue())
         self.assertNotIn('\x1b', output.getvalue())
         self.assertNotIn('/125', output.getvalue())
 

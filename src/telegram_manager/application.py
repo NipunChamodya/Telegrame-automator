@@ -5,6 +5,7 @@ import os
 import sqlite3
 import sys
 import time
+from .terminal import print, TerminalOutputError
 
 from telethon import TelegramClient, errors
 
@@ -113,6 +114,12 @@ def main() -> None:
     except (KeyboardInterrupt, EOFError):
         print("Interrupted. Data and sessions preserved; check history before another delivery attempt.")
         raise SystemExit(130) from None
+    except TerminalOutputError:
+        try:
+            print("Terminal output pipe closed. Restore terminal output and relaunch; saved records were retained.", file=sys.stderr)
+        except TerminalOutputError:
+            pass
+        raise SystemExit(1) from None
     except ValueError as exc:
         LOG.error(type(exc).__name__)
         print(f"Setup/operation stopped: {exc}", file=sys.stderr)

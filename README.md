@@ -55,7 +55,7 @@ python3 main.py
 
 The application checks the environment, obtains API credentials from the environment or Keychain, opens the original `account.session`, verifies authorization and account identity, validates the database, and loads cached groups. An authorized session does not request another login code. Expired authorization requests login using the same session path. An unexpected account ID blocks the dashboard; it does not silently rebind the installation.
 
-The dashboard displays cached groups immediately. If any snapshot is older than 24 hours, or the cache is empty, it offers a refresh. Discovery is optional and reports progress as groups are inspected. Rate limits stop discovery and persist a cooldown; partial discovery progress remains saved. Snapshots of groups you have left may remain visible, but every send rechecks membership and permissions.
+The dashboard displays cached groups immediately, without scanning Telegram or inspecting groups. If the last basic observation is older than the configured basic cache lifetime (default 24 hours), or the cache is empty, it offers a lightweight refresh. Discovery and detailed inspection are separate, explicit operations. Rate limits pause work and persist a cooldown; saved records remain available. Snapshots of groups you have left may remain visible, but every send rechecks membership and permissions.
 
 ## Dashboard
 
@@ -71,11 +71,13 @@ The dashboard displays cached groups immediately. If any snapshot is older than 
 9. View Account Status
 10. Settings
 11. Help
+12. Inspect Pending / Expired Metadata
 0. Exit
 ```
 
-Options 2–4 show/search group metadata: names, marked IDs, type, username, membership count where available, permission verdicts and reasons, slow mode, visible bot IDs, unknown rules and UTC inspection time. Text from Telegram and message files is escaped as JSON to prevent terminal control sequences. Settings shows the configuration location, credential source and safety behavior; it does not display credentials or change them automatically. **11. Help** explains credential setup, login and reconnecting, discovery, allowed/denied/unknown permissions, group restrictions, Telegram rate limits and session-file protection. It is available without making Telegram requests or opening a browser.
+Options **2** and **3** show ten groups per page with Unicode names, actual Telegram IDs, effective permission status and permission timestamps. Use `n`/`p` for pages, `f` to filter allowed/denied/unknown/all, `s` to sort by name/ID/inspection time, and Enter or `q` to return. Search is case-insensitive, including Unicode. On narrow terminals, names are conservatively truncated for layout; the original value remains unchanged in SQLite and detailed JSON. Always select a destination by its **actual Telegram ID**, not its page position.
 
+Option **4** always performs a fresh inspection of one explicit group. Option **12** sequentially inspects missing or expired metadata and skips reusable cache entries. Option **10** shows cache settings and credential source without secrets. Option **11** explains setup, permissions, reconnecting and session protection without making requests.
 Discovery includes joined basic groups and supergroups, including archived dialogs. It excludes broadcast channels and migrated basic groups. Unsupported forum topic contexts can be shown in discovery but are blocked for sending.
 
 - `allowed`: available Telegram membership and text posting permissions permit sending.
@@ -88,13 +90,65 @@ Account `restricted` flags conservatively block sending. Telegram does not expos
 
 The discovery crash was reproduced offline with installed Telethon **1.45.0**. The original `analyze()` function in `telegram.py` (line 35 before the fix) read `permissions.send_messages`. `get_permissions(entity, me)` returns `ParticipantPermissions`, which has no such property. The old test fixture incorrectly invented it. The fixed code uses the real participant type to establish membership/admin status and the entity/participant `ChatBannedRights` (`view_messages`, `send_messages`, `send_plain`) to check text restrictions. Tests now use actual Telethon permission objects. An unverifiable participant remains **unknown**, never implicitly allowed.
 
-Discovery leaves `folder`/`archived` unset in `iter_dialogs(ignore_migrated=True)`, including archived groups. It filters broadcast channels, left/deactivated groups and migrated basic-group duplicates; repeated IDs are inspected once per scan. Inaccessible group entries supplied by Telegram are retained as **denied** for reference, not treated as authorized joined destinations.
+### Phase 1: lightweight synchronization
 
-Each identified group's basic record is saved **before** network metadata requests. A failed lookup or missing permission/full-chat metadata preserves that record and marks unavailable fields unknown. A missing full-chat object, absent bot IDs, hidden participants, optional member counts and slow-mode fields cannot discard the group. Known counts are retained; visible bot IDs are not proof of a moderation role. Confirmed access restrictions are denied. Unexpected per-group processing defects are reported as programming errors and leave permission unknown; subsequent groups continue.
+Option **1** / `tgm discover` streams joined dialogs through `iter_dialogs(ignore_migrated=True)` with folder/archive filters unset. It includes archived groups and collects ID, title, type, username, available archive/membership state and observation time. It excludes broadcast channels, left/deactivated groups and migrated basic-group duplicates. Repeated IDs are processed once per scan. Inaccessible group entries are retained as restricted reference records, not authorized destinations.
 
-Refresh prints each completed group's name and actual status (`Found`, `Restricted`, `Metadata unavailable`, or `Processing error`), followed by totals for this scan. Names are JSON-escaped for terminal safety. Progress uses `[1]`, `[2]`, etc.; it does not fabricate a denominator before Telegram's streamed iteration is complete. Summary totals describe refreshed records, while the dashboard also retains older cached records.
+This phase makes **no per-group entity, permission or full-chat requests**. Dialog paging itself still uses Telegram's API and may encounter a rate limit. Each basic record and its scan counters commit together. New groups start with unknown permissions. Existing inspected metadata and timestamps survive basic title/archive updates; visibility alone never grants posting permission. Records absent from a later scan are retained rather than deleted.
 
-Rate limits persist a cooldown and stop without retrying. Network interruptions, expired authorization and database errors stop the scan, retaining previously saved records (including the current group's basic record if identification finished). An interruption is labeled as such, not reported as successful completion. SQLite table definitions, account-scoped keys and delivery records are unchanged. `metadata_status` is an additive field inside the existing metadata JSON, with no database schema migration.
+Counters distinguish current-scan groups, new records, basic fields updated, unchanged basic fields and fresh inspection caches skipped. `updated` refers to title/type/username/archive/membership changes, not merely a new observation timestamp. The dashboard separately shows total cached records, complete/incomplete metadata, fresh complete caches and groups awaiting permission verification. Unknown/expired permission snapshots display **Unknown**, even if an older raw JSON record said Allowed. Last basic scan state is retained when you run a separate detail inspection. An unfinished previous run is identified rather than presented as completed.
+
+### Phase 2: detailed inspection and cache policy
+
+Detailed inspection occurs only for an explicit single-group inspection, option **12**, `tgm inspect-pending`, or `tgm discover --details`. It is sequential, with a default minimum 0.5 seconds between detailed-request starts and no concurrent metadata workers. Basic groups reuse the full-chat response to verify membership, avoiding a second full-chat request. Supergroups use the supported single-member `GetParticipantRequest`. No `GetParticipantsRequest` enumeration is used to find bots. Telegram's full basic-chat response inherently includes its participant list; the app uses it for account membership, not a separate bot scan.
+
+Available fields include membership, text restrictions, slow mode, member counts and visible bot IDs. Missing fields remain unknown. Optional metadata failures do not by themselves deny posting. Human rules and hidden moderation policies are never inferred. **Allowed is technical text permission, not permission to advertise or send unsolicited messages.**
+
+Configure cache lifetimes through exported environment variables; `.env` is not auto-loaded:
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `TGM_BASIC_TTL_SECONDS` | 86400 | When startup offers a basic refresh |
+| `TGM_PERMISSIONS_TTL_SECONDS` | 900 | Permission snapshot freshness |
+| `TGM_MEMBERS_TTL_SECONDS` | 3600 | Member-count freshness |
+| `TGM_METADATA_TTL_SECONDS` | 21600 | Slow-mode/bot metadata freshness |
+| `TGM_REQUEST_INTERVAL_SECONDS` | 0.5 | Minimum spacing of detail-request starts; 0–5 seconds |
+
+TTL values accept 0–31536000 seconds; zero disables that cache. Different timestamps are stored inside the existing group metadata JSON. Legacy records without these timestamps need an explicit inspection before being considered fresh. A supergroup with expired permissions but fresh counts/bot metadata refreshes its entity and participant only, reusing the other cached fields. Basic-chat membership and member counts share a full-chat endpoint, so those fields refresh together. A confirmed partial/unknown result is briefly cached for the shortest detail TTL to avoid hammering unavailable data; it remains unknown/incomplete and never becomes authorization to send. Network failures are not cached as successful inspections.
+
+Manual commands:
+
+```sh
+tgm discover                         # Basic dialogs only
+tgm discover --details               # Basic scan, then missing/expired details
+tgm inspect-pending                  # Resume missing/expired details; skip fresh results
+tgm inspect-pending --force          # Explicitly bypass detail cache once
+tgm discover --details --force       # Basic scan plus forced detail refresh
+tgm inspect -- -1001234567890         # Fresh inspection of one chosen group
+tgm groups --search 'ශ්‍රී' --permission unknown --sort name --page 1 --page-size 10
+```
+
+Standalone `tgm groups` keeps stdout as Unicode JSON lines; its page summary goes to stderr for pipe/script compatibility.
+
+`--force` does not bypass Telegram cooldowns or restrictions. Sending always forces fresh authorization, identity, membership, text-permission and slow-mode checks after confirmation; caches are never the sole sending authority.
+
+### Cooldowns, interruption and BrokenPipeError
+
+FLOOD_WAIT records the actual Telegram wait duration as an absolute epoch deadline. The dashboard displays remaining seconds. Completed work is committed; further requests are blocked until expiry. There is no automatic wake-up/resume or immediate retry. After waiting, explicitly select option **1** or **12** / the corresponding CLI command. A resumed basic scan streams dialogs again with idempotent upserts; a resumed metadata pass skips completed fresh results. Unknown/optional API metadata errors remain group-local; network, authorization and database failures stop safely with the correct category.
+
+The historical `BrokenPipeError` message lacked a traceback, so its actual origin cannot be established retrospectively. New sanitized I/O diagnostics always identify the boundary (`dialog_iteration`, `entity_lookup`, `full_chat_metadata`, `participant_permissions`, or `terminal_output`), exception class, relevant module/line and whether a record had committed. They exclude exception messages, request objects, credentials and absolute user paths. A request boundary identifies where an error surfaced; its included safe frames distinguish Telethon/asyncio internals when available. No assumption is made that BrokenPipeError means FloodWait.
+
+Expected network failures preserve partial progress and return to the dashboard, where cached views remain available. If the connection is lost, exit/relaunch to restore the session before explicitly continuing. A closed stdout pipe or failed prompt flush cannot support a dashboard: the app stops the operation, preserves committed work and exits with a short stderr explanation. It does not keep requesting Telegram data into a broken output stream. Delivery errors remain uncertain/rejected according to the existing ledger and are never retried automatically.
+
+### Unicode and terminal safety
+
+Sinhala, Tamil, English, combining marks and emoji/ZWJ sequences remain unchanged in storage. New metadata JSON uses UTF-8-preserving serialization; old ASCII-escaped JSON decodes normally without re-encoding migrations. Human-readable JSON uses `ensure_ascii=False`. Terminal rendering removes executable ANSI/control sequences and bidi display controls while preserving combining marks, ZWJ/ZWNJ and variation selectors. JSON previews represent unsafe controls as visible escapes, preserving the exact message value rather than silently changing its body. Unsupported terminal encodings use explicit backslash escapes instead of crashing; use a UTF-8 terminal for readable Sinhala/Tamil. Column widths are conservative standard-library estimates: complex emoji/Indic fonts may not align identically in every terminal.
+
+### SQLite preservation and measured operation counts
+
+Original `groups`, `deliveries`, and `cooldowns` definitions and records remain unchanged. One additive `sync_runs(account PRIMARY KEY, data TEXT)` table stores account-isolated scan counters/state and the previous basic scan. `CREATE TABLE IF NOT EXISTS` is an atomic, idempotent additive upgrade; it never rebuilds the database or deletes records. WAL remains enabled. Basic group upsert and scan progress share one short transaction. UPSERT replaces `INSERT OR REPLACE`, avoids delete/insert semantics and skips identical payload updates. Primary-key lookups replace loading all groups to check a destination. Lists decode a bounded page; aggregates and pending inspections stream records. Python retains only compact seen IDs for scan deduplication, not all dialog/metadata objects. Existing account indexes are sufficient; no speculative indexes were added.
+
+An offline 32-basic-group comparison against repository baseline `9917c95` measured **96 → 0 mocked per-group API-boundary calls** for the default scan (`get_entity`, `get_permissions`, raw full-chat calls; dialog paging excluded). SQLite commits were **64 → 34**, including new persisted progress. The first explicit detail pass made 64 boundary calls (entity + full-chat per basic group), and a second fresh-cache pass made **0**. These are operation counts, not live network throughput, memory-use or elapsed-time claims. No M2/8 GB performance benchmark or live Telegram load test was performed.
 
 ## Sanitized development diagnostics
 
@@ -150,7 +204,7 @@ The default directory is unchanged:
 
 Keychain contains one generic-password item named `org.telegram-group-manager.credentials.<directory-hash>`, with your macOS user ID as its account field. Native calls are tested with mocked framework functions; actual Keychain access still needs a controlled macOS smoke test.
 
-SQLite is checked for integrity, expected tables/columns and its delivery deduplication index before normal initialization. Existing tables are not dropped, records are not deleted, and incompatible or corrupt databases are rejected instead of reset. If a bound installation loses its database file, startup requires backup recovery rather than creating an empty delivery ledger. The original schema is retained. Initialization is idempotent; it is not a general future schema migration system.
+SQLite is checked for integrity, expected tables/columns and its delivery deduplication index before normal initialization. Existing tables are not dropped, records are not deleted, and incompatible or corrupt databases are rejected instead of reset. If a bound installation loses its database file, startup requires backup recovery rather than creating an empty delivery ledger. The original tables are retained; only the additive `sync_runs` status table is initialized. The upgrade is idempotent and tested against the prior schema. It is not a general future schema migration framework.
 
 Logging emits sanitized JSON error events with error class names, excluding API hashes, session contents, verification codes, passwords and message bodies. The explicit preview displays your composed message, so avoid screen sharing sensitive content. There is no remote telemetry. FileVault and a locked macOS account protect the session and unencrypted local metadata at rest; filesystem modes alone do not encrypt them. Python cannot guarantee zeroing secrets in process memory.
 
@@ -177,7 +231,8 @@ FLOOD_WAIT and slow-mode errors persist the returned wait duration as a conserva
 - **Two-step verification failure:** use the Telegram account password, not the API Hash or macOS password. Check your account in Telegram and relaunch. Password attempts are not automatically retried. The app does not create Telegram accounts.
 - **Expired authorization:** relaunch and complete the hidden login prompts. The original session path is reused; session files are not automatically deleted/reset.
 - **Unexpected account identity:** restore the matching session from a secure backup or use a separate `TGM_DATA_DIR` for another account. Do not edit the binding just to bypass the mismatch check.
-- **Network disconnect:** cached views remain available when an operation returns to the menu. Reconnect/relaunch when ready; uncertain deliveries are never retried automatically.
+- **Network disconnect / request BrokenPipeError:** read the sanitized operation/module/line diagnostic, use cached views, and exit/relaunch to restore the connection. Explicitly resume discovery or pending inspection when ready. Never automatically retry an uncertain delivery.
+- **Closed output pipe:** restore terminal/stdout access and relaunch. The app exits rather than repeatedly writing/requesting into a closed pipe. Previously committed group records and counters remain available.
 - **FLOOD_WAIT / slow mode:** wait at least the reported duration. Do not remove cooldowns. For unknown account-wide restrictions, review account status in Telegram; do not probe Telegram limits intentionally.
 - **SQLite or permission failure:** stop the app, check free disk space and ownership of the dedicated directory, and restore a known-good backup if necessary. No automatic database repair/reset is performed. Keep the ledger and session together.
 - **Compromised session:** revoke it using Telegram Settings → Devices and secure your macOS account. Never share `account.session`, database copies or Keychain exports.
@@ -193,7 +248,8 @@ This extends the original `telegram_manager` package rather than replacing it:
 - `setup_wizard.py`, `application.py`: credentials, session restoration, first-run authentication and startup cleanup.
 - `guidance.py`, `error_messages.py`: terminal tutorial, consented browser opening, Help and safe error explanations.
 - `dashboard.py`: terminal menu, cached views, refresh, drafts, single selection and explicit send approval.
-- `telegram.py`, `storage.py`, `models.py`: original async Telegram service, SQLite ledger and group models, with startup validation and fresh authorization checks added.
+- `telegram.py`, `storage.py`, `models.py`: original async service/ledger extended with two-phase sync, streaming queries and scan status.
+- `cache.py`, `terminal.py`: lightweight freshness policies and Unicode-safe terminal output; standard library only.
 - `cli.py`: existing `tgm` command interface.
 
 ## Tests and validation
@@ -210,9 +266,9 @@ Install development dependencies only into the project environment:
 
 Tests mock all Telegram network operations and Keychain framework calls. They must never send real messages. The suites cover dependency setup and cancellation, first-run/existing configuration, account mismatch, interrupted initialization, permission errors, database creation and preservation, atomic duplicate protection, session restoration and 2FA, dashboard views, explicit approval, permission changes, and rate limits.
 
-Validation in the current environment (Python 3.13.4, Telethon 1.45.0): **100 tests passed**, including mocked Telegram integration tests, with no skipped modules. Syntax compilation passed. The real `python3 main.py` command was launched in a terminal with an isolated temporary data directory: it reused `.venv` without installation and displayed the welcome prompt. Setup was then cancelled before reading credentials or contacting Telegram. Discovery regression tests cover real participant permissions, basic/supergroups, archived-dialog inclusion, broadcast/migrated/duplicate filtering, optional metadata, restrictions, malformed responses, partial network/API failures, cooldowns, safe progress output and SQLite persistence/account isolation. An integration test runs the initially empty first-run dashboard through approved discovery, persistence, summary and return to the menu with all network calls mocked. Diagnostic tests verify secret-free error-class and development traceback output. The regression suite reproduces the zero-retry migration bug and verifies the supported retry budget using Telethon's actual `send_code_request`, request loop and migration implementation with mocked wire transport/DC lookup/reconnect. It checks that the same real temporary Telethon session survives migration and reconnect failure. It also covers phone normalization and correction, confirmed phone rejection, interruption, rate limits, expired authorization, login-code forwarding and 2FA. The entry-point integration test exercises the complete first-run tutorial/authentication/Help/dashboard flow and a second restored launch using mocked Telegram and Keychain operations; it checks session-path compatibility, metadata, delivery records and cooldown preservation.
+Validation in the current environment (Python 3.13.4, Telethon 1.45.0): **129 tests passed**, with no skipped modules. Syntax checks pass. All Telegram network interactions in tests are mocked. Coverage includes Sinhala/Tamil/emoji output and storage, control sanitization, ASCII-terminal fallback, JSON previews, lightweight request counts, two-phase inspection, separate cache lifetimes, partial recovery, cooldown persistence, request/output BrokenPipeError separation, legacy database upgrades, no-op upserts, account isolation, pagination/filtering, dashboard statistics, session restoration and existing sending safety.
 
-Ruff could not be installed from the environment's available package index, so its check remains unverified. Live Telegram discovery for this fix, live authorization, actual Keychain reads/writes, and browser launching remain unverified; browser and Keychain interactions are mocked in tests. No real Telegram messages were sent. Before production use, run Ruff and perform a controlled login/Keychain restoration smoke test. A live send still requires separate explicit approval in the application. The application remains CLI-only, with no GUI dependencies.
+The real `python3 main.py` startup is checked with an isolated temporary directory and cancelled at the welcome prompt before credentials or Telegram contact. Full startup/session restoration and the dashboard are exercised with mocks. No live Telegram operation, send, Keychain modification or browser opening was performed for this upgrade. The previous live discovery/connection results are user-reported, not re-verified here. Ruff is unavailable in the current virtual environment, so lint remains unverified. Run it after installing the declared dev dependencies. No GUI or heavy rendering dependency was added.
 
 ## API references
 

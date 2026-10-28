@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+from .terminal import print, input, json_text, TerminalOutputError
 
 from telethon import TelegramClient, errors
 
@@ -16,7 +17,7 @@ from .security import private_directory
 from .error_messages import telegram_error_message
 from .setup_wizard import AUTH_CONNECTION_RETRIES, AUTH_REQUEST_RETRIES, authenticate
 from .storage import Store
-from .telegram import TelegramService, discover_with_output
+from .telegram import TelegramService, discover_with_output, inspect_pending_with_output
 from .diagnostics import report_programming_error
 
 LOG = logging.getLogger("telegram_manager")
@@ -31,9 +32,17 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Permission-aware Telegram group manager")
     sub = result.add_subparsers(dest="command", required=True)
     sub.add_parser("login", help="Authenticate interactively (phone, code, optional 2FA)")
-    sub.add_parser("discover", help="Refresh joined group metadata")
+    discovery = sub.add_parser("discover", help="Lightweight joined-group scan (no per-group API lookups)")
+    discovery.add_argument('--details', action='store_true', help='Inspect missing/expired metadata after the scan')
+    discovery.add_argument('--force', action='store_true', help='With --details, bypass detail freshness once')
+    pending = sub.add_parser('inspect-pending', help='Inspect missing/expired group metadata sequentially')
+    pending.add_argument('--force', action='store_true')
     listing = sub.add_parser("groups", help="Search the local group dashboard")
     listing.add_argument("--search", default="")
+    listing.add_argument('--permission', choices=['all', 'allowed', 'denied', 'unknown'], default='all')
+    listing.add_argument('--sort', choices=['name', 'id', 'checked_at'], default='name')
+    listing.add_argument('--page', type=int, default=1)
+    listing.add_argument('--page-size', type=int, default=20)
     inspect = sub.add_parser("inspect", help="Refresh and display one group's metadata")
     inspect.add_argument("destination", type=int)
     send = sub.add_parser("send", help="Compose and confirm a message to one explicit group")
@@ -96,30 +105,35 @@ async def run(args: argparse.Namespace) -> None:
         if me.bot:
             raise ValueError("This application requires a personal user account.")
         service = TelegramService(client, store, me)
-        if args.command in {"discover", "inspect", "send"} and store.cooldown(me.id) > time.time():
+        if args.command in {"discover", "inspect", "inspect-pending", "send"} and store.cooldown(me.id) > time.time():
             raise ValueError("Account cooldown is active; wait before further Telegram operations.")
         if args.command == "discover":
-            await discover_with_output(service)
+            await discover_with_output(service, detailed=args.details, force=args.force)
         elif args.command == "groups":
-            for group in store.groups(me.id, args.search):
-                print(json.dumps(group, ensure_ascii=True))
+            rows, total = store.page(me.id, query=args.search, permission=args.permission, sort=args.sort,
+                                     page=args.page - 1, size=args.page_size, policy=service.policy)
+            for group in rows:
+                group['effective_permission'] = service.policy.permission(group)
+                print(json_text(group, indent=None))
+            print(f"Page {args.page}; total matches: {total}", file=sys.stderr)
+        elif args.command == 'inspect-pending':
+            await inspect_pending_with_output(service, force=args.force)
         elif args.command == "inspect":
-            print(json.dumps((await service.inspect(args.destination)).data(), indent=2, ensure_ascii=True))
+            print(json_text((await service.inspect(args.destination)).data()))
         elif args.command == "history":
             for row in store.history(me.id):
-                print(json.dumps(row))
+                print(json_text(row, indent=None))
         elif args.command == "send":
             if not sys.stdin.isatty():
                 raise ValueError("Sending requires an interactive terminal and explicit confirmation.")
-            known = {g["id"] for g in store.groups(me.id)}
-            if args.destination not in known:
+            if not store.contains_group(me.id, args.destination):
                 raise ValueError("Destination must first be found with 'tgm discover'.")
             group = await service.inspect(args.destination)
             if group.permission != "allowed":
                 raise ValueError("Sending blocked: " + "; ".join(group.reasons))
             message = compose(args.file)
-            print(json.dumps({"destination": group.id, "name": group.name, "message": message,
-                              "unknown_rules": group.unknown_rules}, indent=2, ensure_ascii=True))
+            print(json_text({"destination": group.id, "name": group.name, "message": message,
+                              "unknown_rules": group.unknown_rules}))
             expected = f"SEND {args.destination}"
             if input(f"Type {expected!r} to approve this exact destination and message: ") != expected:
                 print("Cancelled. Nothing sent.")
@@ -143,7 +157,18 @@ def main() -> None:
     logging.getLogger("telethon").setLevel(logging.CRITICAL)
     try:
         asyncio.run(run(parser().parse_args()))
-    except (ValueError, OSError, EOFError) as exc:
+    except TerminalOutputError:
+        try:
+            print('Terminal output pipe closed. Progress was saved; restore output and relaunch.', file=sys.stderr)
+        except TerminalOutputError:
+            pass
+        raise SystemExit(1) from None
+    except OSError as exc:
+        LOG.error(type(exc).__name__)
+        print(f"I/O operation failed ({type(exc).__name__}). Saved records were retained. "
+              "See sanitized I/O diagnostics; no automatic retry was attempted.", file=sys.stderr)
+        raise SystemExit(1) from None
+    except (ValueError, EOFError) as exc:
         # Log only the event type; never message text, credentials or session data.
         LOG.error(type(exc).__name__)
         print(f"Error: {exc}", file=sys.stderr)
