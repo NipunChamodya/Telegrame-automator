@@ -8,6 +8,8 @@ from pathlib import Path
 from telethon import errors
 
 from .cli import compose
+from .error_messages import telegram_error_message
+from .guidance import show_help
 from .setup_wizard import authenticate, yes
 
 
@@ -33,7 +35,7 @@ class Dashboard:
         count = await self.service.discover(progress=progress)
         print(f"Saved {count} group snapshots.")
 
-    async def offer_refresh(self) -> None:
+    async def offer_refresh(self, *, first_run: bool = False) -> None:
         groups = self.service.store.groups(self.service.me.id)
         stale = not groups
         try:
@@ -42,7 +44,12 @@ class Dashboard:
         except (ValueError, KeyError, TypeError):
             stale = True
         print(f"Loaded {len(groups)} cached groups.")
-        if stale and self.service.store.cooldown(self.service.me.id) <= time.time():
+        if self.service.store.cooldown(self.service.me.id) > time.time():
+            print("A saved Telegram cooldown is active. Discovery can resume after the required wait.")
+        elif first_run:
+            if yes("Would you like to discover your joined groups?", default=True):
+                await self.perform("1")
+        elif stale:
             if yes("Group cache is empty or older than 24 hours. Discover/refresh now?"):
                 await self.perform("1")
 
@@ -56,7 +63,7 @@ class Dashboard:
               "1. Discover / Refresh Groups\n2. View All Groups\n3. Search Groups\n"
               "4. Inspect Group Permissions\n5. Compose Message\n6. Review Approved Destinations\n"
               "7. Send to Selected Group\n8. View Delivery History\n9. View Account Status\n"
-              "10. Settings\n0. Exit\n----------------------------------------")
+              "10. Settings\n11. Help\n0. Exit\n----------------------------------------")
 
     async def select(self) -> None:
         self.require_ready()
@@ -131,17 +138,19 @@ class Dashboard:
                          "cache_stale_after_hours": 24, "automatic_send": False,
                          "credential_changes": "Use environment overrides or macOS Keychain Access; no automatic overwrites.",
                          "drafts": "Memory only; replacing a draft clears destination selection."})
+            elif choice == "11":
+                show_help()
             else:
                 print("Choose one of the displayed menu numbers.")
         except (errors.FloodWaitError, errors.SlowModeWaitError) as exc:
             self.service.store.set_cooldown(self.service.me.id, time.time() + exc.seconds)
             print(f"Telegram requires a wait of {exc.seconds} seconds. No retry attempted.")
-        except errors.UnauthorizedError:
+        except errors.UnauthorizedError as exc:
             self.destination = None
-            print("Authorization expired. Restart to reauthenticate; no delivery will be retried.")
+            print(telegram_error_message(exc))
             raise
         except errors.RPCError as exc:
-            print(f"Telegram rejected the operation ({type(exc).__name__}). No retry attempted.")
+            print(telegram_error_message(exc))
         except sqlite3.Error:
             print("Database failure. Stop and check disk space, permissions and backups. No records were reset.")
             raise
@@ -152,8 +161,8 @@ class Dashboard:
         except OSError as exc:
             print(f"Operation failed ({type(exc).__name__}); check network/file access. No automatic retry.")
 
-    async def run(self) -> None:
-        await self.offer_refresh()
+    async def run(self, *, first_run: bool = False) -> None:
+        await self.offer_refresh(first_run=first_run)
         while True:
             self.header()
             choice = input("Select: ").strip()

@@ -2,6 +2,7 @@
 import importlib.util
 import io
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,7 +31,7 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
         client.send_code_request.assert_not_awaited()
         client.sign_in.assert_not_awaited()
 
-    @patch('telegram_manager.setup_wizard.hidden', side_effect=['+123456789', '12345', 'password'])
+    @patch('telegram_manager.setup_wizard.hidden', side_effect=['+123456789', '12345', 'sensitive-2fa-test-value'])
     async def test_expired_session_and_2fa(self, hidden_input):
         client = AsyncMock()
         client.is_user_authorized.return_value = False
@@ -39,9 +40,9 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
         client.get_me.return_value = NS(id=1, bot=False, deleted=False)
         with patch('sys.stdout', new=io.StringIO()) as output:
             self.assertEqual((await authenticate(client)).id, 1)
-        self.assertNotIn('password', output.getvalue())
+        self.assertNotIn('sensitive-2fa-test-value', output.getvalue())
         self.assertEqual(client.sign_in.await_count, 2)
-        self.assertEqual(client.sign_in.call_args.kwargs, {'password': 'password'})
+        self.assertEqual(client.sign_in.call_args.kwargs, {'password': 'sensitive-2fa-test-value'})
 
     @patch('telegram_manager.setup_wizard.sys.stdin.isatty', return_value=False)
     def test_non_terminal_cannot_collect_secrets(self, tty):
@@ -50,10 +51,12 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
 
     @patch('telegram_manager.setup_wizard.resolve_credentials', return_value=(None, 'unset'))
     @patch('telegram_manager.setup_wizard.platform.system', return_value='Darwin')
-    @patch('telegram_manager.setup_wizard.hidden', side_effect=['123', 'a' * 32])
+    @patch('telegram_manager.setup_wizard.hidden', return_value='a' * 32)
+    @patch('builtins.input', return_value='123')
+    @patch('telegram_manager.setup_wizard.api_tutorial')
     @patch('telegram_manager.setup_wizard.yes', return_value=True)
     @patch('telegram_manager.setup_wizard.MacKeychain')
-    def test_first_run_keychain_save(self, keychain, yes, hidden_input, system, resolve):
+    def test_first_run_keychain_save(self, keychain, yes, tutorial, api_input, hidden_input, system, resolve):
         with tempfile.TemporaryDirectory() as directory, patch('sys.stdout', new=io.StringIO()) as output:
             credentials, source = credential_wizard(Path(directory))
         self.assertEqual(credentials.api_id, 123)
@@ -78,6 +81,7 @@ class StartupIntegrationTests(unittest.IsolatedAsyncioTestCase):
             patch('telegram_manager.application.Dashboard'),
             patch('sys.stdout', new=io.StringIO()),
         ]
+        self.patches.insert(0, patch('telegram_manager.application.welcome'))
         self.started = [p.start() for p in self.patches]
         self.started[-2].return_value.run = AsyncMock()
 
@@ -140,6 +144,16 @@ class StartupIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with application_lock(self.root):
             pass
 
+    async def test_invalid_database_stops_before_credentials(self):
+        path = self.root / 'manager.sqlite3'
+        path.write_bytes(b'invalid-database-fixture')
+        with patch('telegram_manager.application.credential_wizard') as wizard:
+            with self.assertRaises(sqlite3.DatabaseError):
+                await startup()
+            wizard.assert_not_called()
+        self.client.connect.assert_not_awaited()
+        self.assertEqual(path.read_bytes(), b'invalid-database-fixture')
+
     async def test_permission_error_does_not_touch_session(self):
         with patch('telegram_manager.application.private_directory', side_effect=PermissionError):
             with self.assertRaises(PermissionError):
@@ -170,6 +184,16 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await self.dashboard.run()
         self.assertIn('Posting allowed: 1', output.getvalue())
         self.service.send.assert_not_awaited()
+
+    async def test_first_run_discovery_respects_answer_once(self):
+        for answer, expected_calls in [('y', 1), ('', 1), ('n', 0)]:
+            with self.subTest(answer=answer), patch('builtins.input', side_effect=[answer, '0']), \
+                    patch('sys.stdout', new=io.StringIO()) as output:
+                self.service.discover.reset_mock()
+                await self.dashboard.run(first_run=True)
+                self.assertEqual(self.service.discover.await_count, expected_calls)
+                self.assertIn('Posting allowed: 1', output.getvalue())
+                self.service.send.assert_not_awaited()
 
     async def test_send_requires_draft_and_selection(self):
         with self.assertRaises(ValueError):

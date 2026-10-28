@@ -16,14 +16,20 @@ If dependencies are missing, the launcher looks for the project's `.venv`. If it
 
 ## First-run setup
 
-1. Launch `python3 main.py` in a normal interactive terminal. Approve virtual environment setup if needed.
-2. Create your own Telegram API application at [my.telegram.org](https://my.telegram.org).
-3. Enter your API ID and API hash at the hidden prompts.
-4. On macOS, approve saving these credentials to Keychain if desired. macOS may request Keychain access. The application uses native Security framework calls; secrets are not supplied as subprocess arguments.
-5. Enter your phone number with country code, verification code and, if required, 2FA password. All authentication prompts hide input. Failed authentication stops without automatically requesting another code.
-6. Review the verified Telegram account ID and approve binding this installation to that account.
-7. The existing SQLite database is validated/reused, or a new database is initialized without resetting records.
-8. Optionally discover groups, then use the dashboard.
+1. Launch `python3 main.py` in Terminal. Approve virtual environment setup if needed. Existing compatible dependencies are reused.
+2. Read the welcome screen and press Enter. Press Ctrl+C at any point to cancel safely.
+3. If API credentials are missing, follow the five-step tutorial printed in the terminal:
+   - Open the official portal, [my.telegram.org](https://my.telegram.org), and sign in with your phone number.
+   - Open **API development tools**. If necessary, register an application using these suggested values: App title **Telegram Group Manager**, Short name **telegramgroupmanager**, Platform **Desktop** if offered, Description **Personal Telegram group management application**. Complete other required portal fields; choose another short name if unavailable.
+   - Find the **API ID** (your application's numeric identifier) and **API Hash** (its secret credential).
+4. The wizard asks whether to open the portal in your browser, `[Y/n]`. It opens only after you approve; Enter accepts the displayed default. Choosing No lets you open the URL yourself. Browser failure shows the URL without retrying automatically. No portal browser window opens on a normal restored launch or when viewing Help.
+5. Enter the API ID, then the API Hash at its hidden prompt. Invalid formats give a specific explanation and re-prompt that field without echoing the hash. These credentials are different from a bot token or a login code.
+6. On macOS, approve saving credentials to Keychain if desired. macOS may request Keychain access. The application uses native Security framework calls, not secrets in subprocess arguments. Existing entries are never silently overwritten.
+7. Enter your phone number with country code at the hidden prompt. Telegram chooses the code delivery method: check the verified **Telegram** service chat in an already signed-in app first. SMS or another method may be offered, but is not guaranteed. The portal login code is separate from the code for this application. Enter the newest application login code, then your Telegram two-step verification password if enabled. Phone number, code and password prompts hide input.
+8. Review the verified Telegram account ID and approve binding this installation to it. The application validates/reuses your database before requesting credentials; it never resets existing records.
+9. After successful authentication, a **SETUP COMPLETED** screen shows database ready, session authorized and account connected. Answer **Would you like to discover your joined groups? [Y/n]**. Yes runs the existing discovery operation with progress; No opens the dashboard immediately. A saved Telegram cooldown pauses discovery until the wait expires. Nothing is sent.
+
+The walkthrough follows [Telegram's official credential instructions](https://core.telegram.org/api/obtaining_api_id) and [authorization documentation](https://core.telegram.org/api/auth). Field choices are suggestions; Telegram controls the actual portal form and code delivery methods.
 
 API credentials can instead come from `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`. Environment credentials take precedence over Keychain. Set both variables; partial or invalid environment credentials stop setup rather than silently falling back. `.env.example` documents the variables; `.env` is not loaded automatically. Do not put secrets in shell history or source control.
 
@@ -54,10 +60,11 @@ The dashboard displays cached groups immediately. If any snapshot is older than 
 8. View Delivery History
 9. View Account Status
 10. Settings
+11. Help
 0. Exit
 ```
 
-Options 2–4 show/search group metadata: names, marked IDs, type, username, membership count where available, permission verdicts and reasons, slow mode, visible bot IDs, unknown rules and UTC inspection time. Text from Telegram and message files is escaped as JSON to prevent terminal control sequences. Settings shows the configuration location, credential source and safety behavior; it does not display credentials or change them automatically.
+Options 2–4 show/search group metadata: names, marked IDs, type, username, membership count where available, permission verdicts and reasons, slow mode, visible bot IDs, unknown rules and UTC inspection time. Text from Telegram and message files is escaped as JSON to prevent terminal control sequences. Settings shows the configuration location, credential source and safety behavior; it does not display credentials or change them automatically. **11. Help** explains credential setup, login and reconnecting, discovery, allowed/denied/unknown permissions, group restrictions, Telegram rate limits and session-file protection. It is available without making Telegram requests or opening a browser.
 
 Discovery includes joined basic groups and supergroups, including archived dialogs. It excludes broadcast channels and migrated basic groups. Unsupported forum topic contexts can be shown in discovery but are blocked for sending.
 
@@ -130,7 +137,10 @@ FLOOD_WAIT and slow-mode errors persist the returned wait duration as a conserva
 - **Missing dependencies / failed installation:** check pip output, network/index access, disk space and project permissions. Rerun `python3 main.py` and approve setup when ready. A malformed or old `.venv` is left untouched. Repair/recreate only the project virtual environment with Python 3.13+; never remove the private data directory to fix packages.
 - **Interrupted setup:** relaunch. Completed Keychain entries and existing sessions remain available. Incomplete configuration writes are not published; startup releases its process lock when the process exits.
 - **Keychain denied or locked:** unlock your login Keychain and relaunch, or explicitly choose credentials in memory. Use macOS Keychain Access to review a saved item. To rotate credentials, explicitly manage that item or use environment overrides. The app never replaces existing secrets automatically.
-- **Invalid API credentials / login code / 2FA:** correct environment values or the saved Keychain item, then relaunch. Codes and password failures are not automatically retried. The app does not create Telegram accounts.
+- **Invalid API ID or Hash format:** follow the field-specific explanation and re-enter that field. The hash stays hidden and is not echoed in validation errors. If Telegram rejects a correctly formatted credential pair, review API development tools, then correct environment values or explicitly manage the saved item using macOS Keychain Access and relaunch.
+- **Invalid verification code:** use the newest code for this application, not the developer portal login code or API ID. Relaunch when ready; the app does not retry codes automatically.
+- **Expired verification code:** relaunch to explicitly request a new code. Do not reuse the old code.
+- **Two-step verification failure:** use the Telegram account password, not the API Hash or macOS password. Check your account in Telegram and relaunch. Password attempts are not automatically retried. The app does not create Telegram accounts.
 - **Expired authorization:** relaunch and complete the hidden login prompts. The original session path is reused; session files are not automatically deleted/reset.
 - **Unexpected account identity:** restore the matching session from a secure backup or use a separate `TGM_DATA_DIR` for another account. Do not edit the binding just to bypass the mismatch check.
 - **Network disconnect:** cached views remain available when an operation returns to the menu. Reconnect/relaunch when ready; uncertain deliveries are never retried automatically.
@@ -147,6 +157,7 @@ This extends the original `telegram_manager` package rather than replacing it:
 - `main.py`, `bootstrap.py`: standard-library environment checks, consented virtual environment setup and interpreter restart.
 - `security.py`, `configuration.py`: private storage/lock, native Keychain and non-secret account binding.
 - `setup_wizard.py`, `application.py`: credentials, session restoration, first-run authentication and startup cleanup.
+- `guidance.py`, `error_messages.py`: terminal tutorial, consented browser opening, Help and safe error explanations.
 - `dashboard.py`: terminal menu, cached views, refresh, drafts, single selection and explicit send approval.
 - `telegram.py`, `storage.py`, `models.py`: original async Telegram service, SQLite ledger and group models, with startup validation and fresh authorization checks added.
 - `cli.py`: existing `tgm` command interface.
@@ -165,9 +176,9 @@ Install development dependencies only into the project environment:
 
 Tests mock all Telegram network operations and Keychain framework calls. They must never send real messages. The suites cover dependency setup and cancellation, first-run/existing configuration, account mismatch, interrupted initialization, permission errors, database creation and preservation, atomic duplicate protection, session restoration and 2FA, dashboard views, explicit approval, permission changes, and rate limits.
 
-Validation in the current environment (Python 3.13.4): **24 dependency-independent tests passed**, syntax compilation passed, and non-interactive `python3 main.py` safely stopped without installing packages. Telethon and Ruff could not be obtained because the environment's package index/network access is unavailable. Both Telethon-dependent test modules are skipped here; the mocked application/Telegram integration tests and Ruff remain unverified. No live login, Keychain modification or Telegram send has been performed. Do not interpret skipped tests as successful integration validation.
+Validation in the current environment (Python 3.13.4, Telethon 1.45.0): **70 tests passed**, including mocked Telegram integration tests, with no skipped modules. Syntax compilation passed. The real `python3 main.py` command was launched in a terminal with an isolated temporary data directory: it reused `.venv` without installation and displayed the welcome prompt. Setup was then cancelled before reading credentials or contacting Telegram. The entry-point integration test exercises the complete first-run tutorial/authentication/Help/dashboard flow and a second restored launch using mocked Telegram and Keychain operations; it checks session-path compatibility, metadata, delivery records and cooldown preservation.
 
-Before production use, install the declared dependencies, run the complete suite and Ruff without skips, then perform a controlled macOS login/Keychain restoration smoke test. A live send needs your separate explicit approval in the application, ideally in a private test group you own. The app remains a terminal dashboard; no GUI is included.
+Ruff could not be installed from the environment's available package index, so its check remains unverified. Live Telegram authorization, actual Keychain reads/writes, and browser launching remain unverified; browser and Keychain interactions are mocked in tests. No real Telegram messages were sent. Before production use, run Ruff and perform a controlled login/Keychain restoration smoke test. A live send still requires separate explicit approval in the application. The application remains CLI-only, with no GUI dependencies.
 
 ## API references
 

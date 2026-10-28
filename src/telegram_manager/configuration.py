@@ -17,10 +17,21 @@ class Credentials:
 
     @classmethod
     def parse(cls, api_id: str, api_hash: str) -> "Credentials":
-        if (not re.fullmatch(r"[0-9]{1,10}", api_id) or not 0 < int(api_id) <= 2147483647
-                or not re.fullmatch(r"[a-fA-F0-9]{32}", api_hash)):
-            raise ValueError("Invalid API credentials. API ID must be a positive integer; hash must be 32 hex characters.")
-        return cls(int(api_id), api_hash)
+        return cls(cls.validate_id(api_id), cls.validate_hash(api_hash))
+
+    @staticmethod
+    def validate_id(value: str) -> int:
+        if not re.fullmatch(r"[0-9]{1,10}", value) or not 0 < int(value) <= 2147483647:
+            raise ValueError("Invalid API ID. Enter the positive number shown under API development tools "
+                             "at my.telegram.org (digits only, up to 2147483647).")
+        return int(value)
+
+    @staticmethod
+    def validate_hash(value: str) -> str:
+        if not re.fullmatch(r"[a-fA-F0-9]{32}", value):
+            raise ValueError("Invalid API Hash. Enter exactly 32 hexadecimal characters (0-9, a-f) "
+                             "from API development tools. Your input has not been displayed or saved.")
+        return value
 
 
 def data_directory() -> Path:

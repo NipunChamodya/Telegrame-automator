@@ -95,13 +95,13 @@ def ensure_dependencies() -> bool:
 
 def main() -> None:
     try:
-        print(f"Telegram Group Manager — {platform.system()} / Python {platform.python_version()}")
         if platform.system() not in {"Darwin", "Linux"}:
             raise ValueError("This application supports macOS; Linux can use environment credentials.")
         if sys.version_info < (3, 13):
             raise ValueError("Python 3.13 or newer is required.")
         if not ensure_dependencies():
             raise SystemExit(1)
+        print(f"Telegram Group Manager — {platform.system()} / Python {platform.python_version()}")
         from .application import main as launch
         launch()
     except ImportError:
