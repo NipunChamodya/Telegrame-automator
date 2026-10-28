@@ -13,6 +13,7 @@ struct PageHeader: View {
             }
             Spacer(minLength: 0)
         }.frame(maxWidth: .infinity, alignment: .topLeading)
+            .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("pageHeader")
     }
 }
 
@@ -100,5 +101,53 @@ struct FilterMenu: View {
         Picker(title, selection: $selection) {
             ForEach(options, id: \.self) { Text($0.replacingOccurrences(of: "_", with: " ").capitalized).tag($0) }
         }.pickerStyle(.menu).fixedSize().accessibilityLabel(title)
+    }
+}
+
+
+/// Content controls stay in the content area, never inserted into the window toolbar.
+struct PageControls<Content: View>: View {
+    @ViewBuilder var content: Content
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            HStack(spacing: 12) { content }.padding(.bottom, 2)
+        }.fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+struct LoadingStateView: View {
+    let title: String
+    var body: some View {
+        VStack(spacing: 12) { ProgressView(); Text(title).foregroundStyle(.secondary) }
+            .frame(maxWidth: .infinity, maxHeight: .infinity).accessibilityElement(children: .combine)
+    }
+}
+
+struct ErrorStateView: View {
+    let title: String
+    let message: String
+    var retry: (() -> Void)? = nil
+    var body: some View {
+        EmptyStateView(title: title, symbol: "exclamationmark.triangle", description: message,
+                       actionTitle: retry == nil ? nil : "Try Again", action: retry)
+    }
+}
+
+
+struct CachedReadStatus: View {
+    @ObservedObject var model: AppModel
+    let screen: Screen
+    let retry: () -> Void
+    var body: some View {
+        Group {
+            if model.cachedLoading.contains(screen) {
+                HStack(spacing: 10) { ProgressView().controlSize(.small); Text("Loading saved records…").font(.callout).foregroundStyle(.secondary); Spacer() }
+            } else if let error = model.cachedErrors[screen] {
+                HStack(alignment: .top, spacing: 10) {
+                    Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    Spacer(); Button("Try Again", action: retry)
+                }
+            }
+        }.fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("cachedStatus_" + screen.rawValue)
     }
 }

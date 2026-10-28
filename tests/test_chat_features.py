@@ -16,6 +16,12 @@ from telegram_manager.models import Group
 from telegram_manager.storage import Store, DuplicateMessage
 
 
+def file_message(size):
+    document = types.Document(id=1, access_hash=0, file_reference=b'', date=datetime.now(timezone.utc),
+                              mime_type='application/octet-stream', size=size, dc_id=1, attributes=[])
+    return types.Message(id=1, peer_id=types.PeerUser(22), media=types.MessageMediaDocument(document=document))
+
+
 class ChatFeatureTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -48,6 +54,14 @@ class ChatFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.call('chats.list',kind='group'))['total'],0)
         self.backend.client.get_me.assert_not_awaited()
 
+    async def test_group_scope_includes_basic_and_supergroups_without_network(self):
+        self.cache.save(11, {'id': -1, 'name': 'Basic', 'kind': 'group'})
+        self.cache.save(11, {'id': -2, 'name': 'Super', 'kind': 'supergroup'})
+        self.cache.save(11, {'id': -3, 'name': 'Broadcast', 'kind': 'channel'})
+        rows = (await self.call('chats.list', kind='groups'))['chats']
+        self.assertEqual({row['id'] for row in rows}, {-1, -2})
+        self.backend.client.get_me.assert_not_awaited()
+
     async def test_dialog_types_archive_migration_and_progress(self):
         entities=[types.User(id=11,first_name='Me'),types.User(id=22,first_name='Friend'),
                   types.Chat(id=3,title='Group',photo=types.ChatPhotoEmpty(),participants_count=2,date=datetime.now(timezone.utc),version=1),
@@ -74,12 +88,12 @@ class ChatFeatureTests(unittest.IsolatedAsyncioTestCase):
     async def test_recent_messages_are_bounded_no_sender_fetches(self):
         async def messages(destination,**kwargs):
             self.assertEqual(destination,22);self.assertEqual(kwargs,{'limit':1,'offset_id':42,'search':None})
-            yield SimpleNamespace(id=40,message='தமிழ் 😀',sender=None,sender_id=22,date=datetime.now(timezone.utc),out=False,file=None)
+            yield types.Message(id=40,peer_id=types.PeerUser(22),message='தமிழ் 😀',from_id=types.PeerUser(22),date=datetime.now(timezone.utc),out=False)
         self.backend.client.iter_messages=messages
         result=await self.call('messages.list',destination=22,limit=1,offset_id=42)
         self.assertEqual(result['next_offset_id'],40)
         self.assertTrue(result['has_more']);self.assertEqual(result['messages'][0]['text'],'தமிழ் 😀')
-        self.backend.client.get_entity.assert_not_awaited()
+        self.backend.client.get_entity.assert_awaited_once_with(22)
 
     async def test_conversation_drafts_preserved_and_account_scoped(self):
         await self.call('chatdraft.save',destination=22,message='Draft 👩🏽‍💻')
@@ -158,7 +172,7 @@ class ChatFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.cache.get(12, 11))
 
     async def test_media_download_private_atomic_and_non_overwriting(self):
-        message = SimpleNamespace(file=SimpleNamespace(size=4))
+        message = file_message(4)
         self.backend.client.get_messages.return_value = message
         async def download(message, file, progress_callback):
             file.write(b'demo'); progress_callback(file.tell(), 4)
@@ -173,7 +187,7 @@ class ChatFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output.read_bytes(), b'demo')
 
     async def test_media_cancellation_and_oversize_leave_no_partial_files(self):
-        self.backend.client.get_messages.return_value = SimpleNamespace(file=SimpleNamespace(size=4))
+        self.backend.client.get_messages.return_value = file_message(4)
         async def interrupted(message, file, progress_callback):
             file.write(b'ab'); raise asyncio.CancelledError()
         self.backend.client.download_media.side_effect = interrupted
@@ -181,12 +195,12 @@ class ChatFeatureTests(unittest.IsolatedAsyncioTestCase):
             await self.call('media.download', destination=22, message_id=1, path=str(self.root/'cancel.bin'))
         self.assertFalse((self.root/'cancel.bin').exists())
         self.assertEqual(list(self.root.glob('.telegram-download-*')), [])
-        self.backend.client.get_messages.return_value = SimpleNamespace(file=SimpleNamespace(size=65*1024*1024))
+        self.backend.client.get_messages.return_value = file_message(65*1024*1024)
         with self.assertRaises(IPCError):
             await self.call('media.download', destination=22, message_id=1, path=str(self.root/'large.bin'))
 
     async def test_bounded_media_sink_rejects_inaccurate_server_size(self):
-        self.backend.client.get_messages.return_value = SimpleNamespace(file=SimpleNamespace(size=1))
+        self.backend.client.get_messages.return_value = file_message(1)
         async def oversized(message, file, progress_callback): file.write(b'too large')
         self.backend.client.download_media.side_effect = oversized
         with self.assertRaises(IPCError):
@@ -215,6 +229,7 @@ class ChatFeatureTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reply_uses_one_selected_destination_and_raw_random_id(self):
         self.backend.client.return_value = SimpleNamespace(id=123)
+        self.backend.client.get_messages.return_value = types.Message(id=9, peer_id=types.PeerUser(22), message='reply target')
         preview = await self.preview(reply_to=9)
         await self.call('chat.send', account_id=11, token=preview['token'], confirmation='SEND 22')
         request = self.backend.client.call_args.args[0]

@@ -61,6 +61,15 @@ Stop sharing the affected files/logs, revoke compromised Telegram sessions throu
 
 ## Supported versions
 
-Version 0.3.0 is a development preview on the currently tested branch. Security fixes target that branch; no long-term maintenance or security guarantee is offered. Earlier 0.2 releases have not been independently reassessed here and should not be assumed to receive ongoing fixes. Build/test results are recorded separately from live Telegram acceptance and distribution readiness.
+Version 0.4.0 is a development preview on the currently tested branch. Security fixes target that branch; no long-term maintenance or security guarantee is offered. Earlier 0.2 releases have not been independently reassessed here and should not be assumed to receive ongoing fixes. Build/test results are recorded separately from live Telegram acceptance and distribution readiness.
 
 Managed-group sends require fresh Telegram posting-permission inspection and explicit destination approval. Personal-chat and Saved Messages sends instead require a cached personal destination, a fresh verified account identity and fresh peer validation, plus an exact single-use preview/confirmation. They cannot route managed-group destinations around the group workflow. A technical capability to send never establishes consent to unsolicited messages.
+
+
+## V3 client data and update boundaries
+
+The visible product is **Unofficial Telegram Manager**. No official Telegram logo or licensed application source was copied. API terms and supported-feature limits are tracked in [the official-source study](docs/TELEGRAM_REFERENCE_STUDY.md). Channel/bot content remains gated pending sponsored-content presentation/reporting; this gate alone is not a full compliance certification.
+
+Content routes verify both resolved peer and returned message identity. Protected, expiring, restricted and unknown content is not imported into general history/media projections. One account/generation-scoped update adapter clears unsafe content on loss, cancellation and account changes; no polling/indexing/training pipeline is added. Visible reads and genuine focused typing are not deceptively suppressed.
+
+Own personal plaintext edits and delete-for-me require exact one-use confirmation, fresh ownership/version checks and a separate durable operation reservation. Unknown outcomes are not retried. Image-preview files are sensitive local plaintext in a private bounded cache; cleanup is best-effort with lazy backend expiration, not secure erasure or encryption. Decoder/file limits and ownership-index recovery are documented in [CLIENT_FEATURES.md](docs/CLIENT_FEATURES.md). Contacts/profile DTOs omit phone numbers/access hashes; read-only folder definitions do not authorize remote changes.

@@ -6,8 +6,8 @@ struct ComposerView: View {
         GeometryReader { geometry in
             if geometry.size.width >= 850 {
                 HSplitView {
-                    composingPane.frame(minWidth: 430)
-                    reviewPane.frame(minWidth: 320, idealWidth: 380)
+                    ScrollView { composingPane }.frame(minWidth: 430, maxHeight: .infinity)
+                    ScrollView { reviewPane }.frame(minWidth: 320, idealWidth: 380, maxHeight: .infinity)
                 }
             } else {
                 ScrollView {
@@ -31,7 +31,7 @@ struct ComposerView: View {
                 TextEditor(text: $model.draft).font(.body).padding(8).scrollContentBackground(.hidden)
                     .background(.background, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
-                    .frame(minHeight: 200)
+                    .frame(height: 220)
                     .accessibilityLabel("Message text").accessibilityIdentifier("messageEditor")
                 HStack {
                     Text("\(ComposerValidation.units(model.draft)) / 4096 UTF-16 units").monospacedDigit().font(.caption).foregroundStyle(model.validation != nil && !model.draft.isEmpty ? .red : .secondary)
@@ -74,7 +74,7 @@ struct ComposerView: View {
                     EmptyStateView(title: "No approved preview", symbol: "doc.text.magnifyingglass", description: "Compose a message, select one approved destination, then verify permissions. Changing either clears the preview.").frame(minHeight: 260)
                 }
                 Spacer(minLength: 0)
-            }.padding(20)
+            }.padding(20).frame(maxWidth: .infinity, alignment: .topLeading)
     }
 }
 
@@ -84,7 +84,9 @@ struct DestinationsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             PageHeader(title: "Approved destinations", subtitle: "Manage groups you have explicitly approved for message delivery.", symbol: "checkmark.seal")
+            SearchToolbar(text: $model.approvedSearch, prompt: "Search approved groups").accessibilityIdentifier("destinationSearch")
             Text("Each message still requires a fresh permission check and exact confirmation.").font(.caption).foregroundStyle(.secondary)
+            CachedReadStatus(model: model, screen: .destinations, retry: { Task { await model.loadApprovals() } })
             if model.approvals.isEmpty {
                 EmptyStateView(title: model.approvedSearch.isEmpty ? "No approved destinations" : "No matching destinations", symbol: "checkmark.seal", description: "Choose a group in Groups and explicitly approve it from the inspector.", actionTitle: "Browse Groups", action: { model.screen = .groups })
             } else {
@@ -103,9 +105,9 @@ struct DestinationsView: View {
                 }.listStyle(.inset)
             }
         }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .searchable(text: $model.approvedSearch, prompt: "Search approved groups")
         .onChange(of: model.approvedSearch) { _, _ in Task { await model.loadApprovals() } }
         .task { await model.loadApprovals() }
+        .accessibilityIdentifier("destinationsScreen")
         .confirmationDialog("Revoke this destination's approval?", isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } }), titleVisibility: .visible) {
             if let group = revoking { Button("Revoke \(group.name)", role: .destructive) { model.setApproval(group.id, approved: false); revoking = nil } }
         }
@@ -141,6 +143,7 @@ struct HistoryView: View {
                 HStack(spacing: 12) { filters }
                 VStack(alignment: .leading, spacing: 10) { filters }
             }
+            CachedReadStatus(model: model, screen: .history, retry: { Task { await model.loadHistory() } })
             if records.isEmpty {
                 EmptyStateView(title: model.deliveries.isEmpty ? "No delivery records" : "No matching deliveries", symbol: "clock.arrow.circlepath", description: model.deliveries.isEmpty ? "Delivery results appear here after a message you explicitly confirm. Nothing sends from this screen." : "Try a different search or status filter.", actionTitle: model.deliveries.isEmpty ? "Compose a Message" : "Clear Filters", action: {
                     if model.deliveries.isEmpty { model.screen = .composer } else { query = ""; status = "all" }

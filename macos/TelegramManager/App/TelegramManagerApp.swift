@@ -16,17 +16,20 @@ import AppKit
         return CGSize(width: 1260, height: 820)
     }
     var body: some Scene {
-        Window("Telegram Manager", id: "workspace") {
+        Window("Unofficial Telegram Manager", id: "workspace") {
             RootView(model: model)
                 .frame(minWidth: 980, minHeight: 640)
                 .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
                 .onAppear { delegate.model = model; model.start() }
         }
+        .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified)
         .defaultSize(width: fixtureWindowSize.width, height: fixtureWindowSize.height)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Discover Groups") { model.discover() }.keyboardShortcut("r", modifiers: [.command, .shift]).disabled(model.busy || !model.connected)
-                Button("Compose Message") { model.screen = .composer }.keyboardShortcut("n", modifiers: .command)
+                Button("New Message") { model.composePersonalMessage() }.keyboardShortcut("n", modifiers: .command)
+                Button("Managed Group Composer") { model.screen = .composer }.keyboardShortcut("n", modifiers: [.command, .shift])
             }
         }
         Settings {

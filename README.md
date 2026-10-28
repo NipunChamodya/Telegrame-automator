@@ -1,103 +1,101 @@
 <div align="center">
-  <img src="docs/assets/logo.svg" width="104" height="104" alt="Telegram Manager — an original conversation-workspace icon">
-  <h1>Telegram Manager</h1>
-  <p><strong>Your Telegram workspace. Native to macOS. Deliberate by design.</strong></p>
-  <p>Manage account profiles, browse conversations, inspect groups, and compose messages with explicit delivery controls.</p>
-  <p>
-    <img alt="Platform: macOS 14 or newer" src="https://img.shields.io/badge/macOS-14%2B-24292f?logo=apple&amp;logoColor=white">
-    <img alt="Architecture: Apple Silicon" src="https://img.shields.io/badge/Apple_Silicon-arm64-147EFB">
-    <img alt="Interface: SwiftUI" src="https://img.shields.io/badge/UI-SwiftUI-087EA4">
-    <img alt="Backend: Python 3.13 or newer" src="https://img.shields.io/badge/Python-3.13%2B-3776AB">
-    <img alt="Project status: development preview" src="https://img.shields.io/badge/status-development_preview-D97706">
-  </p>
-  <p><a href="#quick-start">Build &amp; launch</a> · <a href="docs/USER_GUIDE.md">User guide</a> · <a href="docs/ARCHITECTURE.md">Architecture</a> · <a href="docs/VALIDATION.md">Verification</a></p>
+
+<img src="docs/assets/logo.svg" width="112" height="112" alt="Unofficial Telegram Manager icon" />
+
+# Unofficial Telegram Manager
+
+### Your conversations. Your accounts. Your workspace.
+
+**A native macOS Telegram workspace combining everyday messaging with deliberate, permission-aware group management.**
+
+[![macOS](https://img.shields.io/badge/macOS-14%2B-161B22?logo=apple&logoColor=white)](#requirements)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-161B22?logo=apple&logoColor=white)](#requirements)
+[![SwiftUI](https://img.shields.io/badge/Interface-SwiftUI-0A84FF)](#under-the-hood)
+[![Python](https://img.shields.io/badge/Backend-Python%203.13%2B-3776AB?logo=python&logoColor=white)](#under-the-hood)
+[![Status](https://img.shields.io/badge/Release-Development%20Preview-F59E0B)](#project-status)
+
+**[Get started](#get-started)** · **[Explore features](#the-experience)** · **[Architecture](#under-the-hood)** · **[Security](#built-with-boundaries)** · **[Roadmap](#whats-next)**
+
+<sub>Independent third-party project · Not affiliated with Telegram</sub>
+
 </div>
 
-> **Development preview — v0.3.0.** This is a real SwiftUI/AppKit application with a Python backend, not a web wrapper. Local builds require the checkout's Python environment. Interactive launch and screenshot validation have encountered execution-environment blockers; compilation alone is not a verified desktop launch. There is no verified standalone installer or distributable release yet.
+---
 
-## A workspace with clear boundaries
+> [!IMPORTANT]
+> **V3 · v0.4.0 · Development preview.** The native app and its backend compile and pass automated tests, but complete interactive UI acceptance is **not yet verified**. Builds currently depend on this repository's Python virtual environment. **No standalone installer or production-ready release is available.** See [validation evidence](docs/VALIDATION.md).
 
-Telegram Manager extends an existing permission-aware CLI into a native desktop app. The Python service remains responsible for Telegram authentication, SQLite persistence, account identity and delivery safety. The CLI remains available for maintenance.
+## One app. Two ways to work.
 
-| Workspace | Implemented capabilities |
-| --- | --- |
-| Accounts | Separate session/database/settings/Keychain namespaces; explicit switching and connection controls |
-| Groups | Lightweight discovery, cached search/filter/sort, metadata freshness, bounded permission inspections |
-| Conversations | Explicit dialog refresh, paginated recent messages, Saved Messages and Unicode text |
-| Composition | Multiline editor, UTF-8 import, local drafts, previews and exact destination confirmation |
-| Delivery | Managed-group approval, fresh permission checks, account verification, persistent deduplication and history |
-| macOS | Native navigation and controls, semantic colors, light/dark/system appearance, selective Liquid Glass on macOS 26 |
-| Storage | Private local files, account binding, SQLite backup and sanitized diagnostics |
+**Talk naturally. Manage intentionally.**
 
-**Technical text-posting permission does not imply permission to advertise or send unsolicited messages.** Newly discovered groups are never automatically approved or messaged.
+Telegram Manager brings a messaging-first desktop experience and an advanced workspace into one native Mac application. Browse supported conversations, move between isolated Telegram accounts, and use explicit, auditable workflows when interacting with managed groups.
 
-## Backend connection and recovery
+| 💬 **Everyday messaging** | 🧭 **Advanced workspace** |
+| :--- | :--- |
+| Cached conversations, supported private/group history, Saved Messages, replies, local drafts, and account-scoped updates. | Group discovery, bounded permission inspections, approved destinations, reviewed composition, and persistent delivery records. |
+| Familiar conversation navigation. | Controls designed to prevent accidental or unapproved delivery. |
 
-The app now explicitly owns one managed Python process. Ordinary requests never spawn replacements; Retry Connection waits for the old owned child to exit before starting one replacement. A single workspace window and shared settings model prevent competing window-owned backends.
+### The experience
 
-If **Another instance is running** appears, use **View Diagnostics** and quit the known competing CLI/app before retrying. The exact owner of the reported real-world conflict could not be inspected in the managed environment. Never delete `manager.lock`, sessions or databases to suppress the error. See [backend lifecycle and safe recovery](docs/BACKEND_LIFECYCLE.md).
+| Area | What you can do |
+| :--- | :--- |
+| **Chats** | Browse cached dialogs; load supported private and group message history; navigate with search and pagination. |
+| **Accounts** | Add separate Telegram profiles, switch explicitly, disconnect, log out, or remove eligible local profiles with confirmation. |
+| **Contacts** | Refresh Telegram contacts on demand and inspect supported profile metadata. |
+| **Groups** | Discover joined groups, search and filter cached results, and review metadata freshness. |
+| **Channels** | Browse cached channel identities; content access is intentionally restricted pending additional support. |
+| **Saved Messages** | Access your supported personal Saved Messages conversation. |
+| **Composer & Drafts** | Write Unicode text, import UTF-8 files, save drafts, and review exact destinations before delivery. |
+| **Permissions** | Inspect posting evidence in bounded batches with explicit handling of unknown states and rate limits. |
+| **Destinations** | Explicitly approve individual managed groups; approvals never authorize automatic sending. |
+| **History & Activity** | Review persistent delivery/action records and a separate safe, session-only activity timeline. |
 
-## Responsive workspace
+<details>
+<summary><strong>What does “supported” mean?</strong></summary>
 
-Chats now gives the conversation list and history their own expanding scroll areas, compact top controls and anchored pagination. Wide windows show the sidebar, conversation list and detail; narrower windows use list/detail navigation with a Back action. Cached searches debounce locally without refreshing Telegram dialogs.
+The current client supports private users, Saved Messages, and accessible basic/supergroup conversations within documented boundaries. Some message types, protected content, bots, and channels do **not** offer full content browsing or actions. Folder definitions are read-only metadata; broad media, calling, stories, and secret chats are not implemented. For the precise matrix, see [client feature boundaries](docs/CLIENT_FEATURES.md) and [Telegram feature feasibility](docs/TELEGRAM_FEATURE_FEASIBILITY.md).
 
-Activity is a searchable, filterable timeline of up to 100 safe session-only events, separate from the persistent delivery ledger. History adds local status/sort/search controls; approved-destination and history empty states include their action directly below the explanation. A grouped sidebar and larger account switcher make the selected account clearer. Visual acceptance remains unverified where graphical execution is blocked; see [UI validation](docs/UI_VALIDATION.md).
+</details>
 
-## Screenshots and visual evidence
+## Designed for the Mac
 
-No application screenshots or animated demonstrations are published here yet. Genuine graphical capture has not succeeded in the managed development environment; there are no generated mockups presented as screenshots.
+Built with **SwiftUI + AppKit**, not a browser wrapper. The desktop interface uses native windows, keyboard-aware navigation, system appearance, and a responsive conversation layout. On supported macOS versions, selective Liquid Glass styling enhances native controls without replacing their behavior.
 
-The [UI validation report](docs/UI_VALIDATION.md) records launch attempts, executable UI tests, screenshot commands and unverified screens. Capture only synthetic fixtures, never real credentials or private conversations. Accepted screenshots belong under `docs/assets/screenshots/`; short genuine recordings belong under `docs/assets/demos/`.
+- **Messaging-first navigation** with an independent advanced workspace.
+- **Adaptive conversation layout** for wide and narrow windows.
+- **Local-first cached views** that avoid unnecessary Telegram requests.
+- **Explicit loading, retry, and error states** rather than silently empty panels.
+- **Light, dark, and system appearance** with native accessibility semantics.
 
-## Multiple accounts
+> [!NOTE]
+> **Real screenshots are coming after graphical acceptance.** The managed build environment could not complete reliable GUI capture. This README deliberately does not present mockups or fabricated screenshots as evidence. The [UI validation guide](docs/UI_VALIDATION.md) documents local capture procedures; accepted assets will live in `docs/assets/screenshots/`.
 
-The original installation stays in place. Additional profiles use separate private directories rather than reusing the original session or resetting its account binding. Telegram's verified numeric account ID identifies account data; names and phone numbers do not.
-
-- Add another profile through **Accounts**, then complete authentication in the app.
-- Switch accounts explicitly. Cached data loads without an automatic discovery scan.
-- Drafts, approved destinations, histories and cooldowns stay with their original account.
-- Switching invalidates previews; a send cannot inherit another account's confirmation.
-- Disconnect preserves authorization. Remote logout and local removal are separate, confirmed actions.
-
-See [multi-account storage and lifecycle](docs/MULTI_ACCOUNT.md) for exact behavior, legacy-profile protections and limitations. Background Telegram work is conservative and sequential; inactive accounts are not continuously polled.
-
-## Groups and permissions
-
-Discovery retrieves basic joined-dialog metadata first, including archived groups. It excludes broadcast channels and migrated duplicates from managed messaging destinations. Detailed permissions, available slow mode and visible bot metadata are fetched only through explicit inspections or fresh pre-send checks.
-
-**Allowed**, **Denied** and **Unknown** describe available Telegram evidence. Unknown fields and hidden moderation policies are reported honestly. A missing optional field does not prove that posting is forbidden—or safe.
-
-Inspection batches are bounded and cancellable. Telegram FloodWait pauses work, saves progress and persists the deadline. The app does not evade limits or immediately retry. See the [CLI/cache reference](docs/CLI_GUIDE.md) and [user guide](docs/USER_GUIDE.md).
-
-## Conversations and messages
-
-The chat browser supports private dialogs, groups, channels and Saved Messages. Reading a conversation explicitly loads a bounded page of history; it does not download entire histories. Local search and explicit remote search are distinct operations.
-
-Personal text sends require the active account, a selected cached conversation, preview and exact confirmation. Managed groups retain the stricter approved-destination and fresh-permission workflow. Each send reserves a persistent delivery record before submission. Lost connections and uncertain outcomes are never automatically replayed.
-
-Per-conversation drafts and local labels are account-scoped. Attachment download is explicit, bounded to known-size files up to 64 MiB, cancellable and non-overwriting. File upload, edit/delete/forward workflows and complete media previews are not represented as completed features.
-
-## Quick start
+## Get started
 
 ### Requirements
 
-- Apple Silicon Mac; deployment target macOS 14+, with selective Liquid Glass on macOS 26+.
-- Xcode and its macOS SDK for source builds.
-- Python 3.13+ and the declared Telethon dependency in this checkout's `.venv`.
-- Your own Telegram API application credentials for authentication.
+| Requirement | Details |
+| :--- | :--- |
+| Mac | Apple Silicon (`arm64`), macOS **14+** |
+| Build tools | Xcode with macOS SDK |
+| Python | **3.13+**, installed in this repository's `.venv` |
+| Telegram | Your own Telegram account and [API application credentials](https://my.telegram.org) |
 
-### Build from source
+### 1 · Build from source
 
 ```bash
 git clone https://github.com/NipunChamodya/Telegrame-automator.git
 cd Telegrame-automator
+
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
+
 ./macos/build.sh
 open macos/build/Build/Products/Debug/TelegramManager.app
 ```
 
-For the existing checkout:
+Already working from the original project folder?
 
 ```bash
 cd ~/Desktop/TelegramManager
@@ -105,94 +103,94 @@ cd ~/Desktop/TelegramManager
 open macos/build/Build/Products/Debug/TelegramManager.app
 ```
 
-Quit the CLI before opening the desktop app. An exclusive lock protects each shared session/database. The GUI starts its Python subprocess itself; do not start the CLI as a prerequisite.
+> [!CAUTION]
+> **Quit the CLI before launching the desktop app.** The application starts and owns its Python backend. Do not start a second backend manually, and never delete a session or lock file to bypass a reported ownership conflict.
 
-**Source build ≠ standalone release.** The local `.app` uses this checkout's virtual environment. A portable embedded runtime, release signing/notarization and clean-Mac acceptance testing remain required. No download button or installer is advertised.
+### 2 · Connect your Telegram account
 
-<details>
-<summary>CLI maintenance and Release builds</summary>
+1. Open **Accounts → Add Account** (or **Connect** on first launch).
+2. Obtain an **API ID** and **API hash** from [Telegram's developer portal](https://my.telegram.org) → **API development tools**.
+3. Enter your phone number with its country code.
+4. Enter the verification code delivered by Telegram.
+5. Complete two-step verification if prompted.
+6. Verify the account identity shown by the app.
 
-```bash
-python3 main.py
-./macos/build.sh Release
-open macos/build/Build/Products/Release/TelegramManager.app
-```
+Adding a profile does **not** approve any destination or send any messages. Additional accounts use isolated local storage; switching accounts invalidates prior message previews and send confirmations.
 
-The CLI retains guided dependency/setup checks and never installs packages globally without approval. See [CLI_GUIDE.md](docs/CLI_GUIDE.md) for environment variables, commands, cache policies and recovery.
+**Account actions:** **Disconnect** keeps the local session; **Log Out** requests remote session invalidation; **Remove Local Data** is a separate confirmed action for eligible profiles. See [multi-account behavior](docs/MULTI_ACCOUNT.md).
 
-</details>
+### 3 · Explore the workspace
 
-## Connect Telegram
+Open **Chats** to browse supported conversations. Use **Groups** to discover joined groups and **Permissions** to inspect available posting evidence. When you choose to manage delivery to a group, approve that destination explicitly and review each message before confirming it.
 
-1. Open the app and choose **Connect** or **Add Account**.
-2. Obtain an API ID and API hash from [Telegram's official developer portal](https://my.telegram.org), under **API development tools**. The app explains the fields; API hash input is secret.
-3. Enter your phone number in international format, such as `+947XXXXXXXX` for a Sri Lankan mobile number.
-4. Enter the login code delivered by Telegram. The app does not promise a specific delivery channel.
-5. Enter your two-step verification password if Telegram requests it.
-6. Confirm the identity returned by Telegram before binding the profile.
+**Posting permission is not consent to advertise or send unsolicited messages.** No newly discovered group is automatically approved or messaged.
 
-Existing sessions are reused where possible. No destination is approved and no message is sent during setup.
+## Built with boundaries
 
-| Action | Meaning |
-| --- | --- |
-| Disconnect | Close the connection; retain session and cached data |
-| Log Out | Explicitly ask Telegram to invalidate this session; report failures honestly |
-| Remove local data | Separately confirmed removal of the selected supported profile's local data; does not promise remote logout |
+Security is part of the workflow—not an optional mode.
 
-Treat `account.session` as an authentication credential. Never share it, put it in Git, or include it in screenshots. See [USER_GUIDE.md](docs/USER_GUIDE.md) for walkthroughs and recovery.
+| Boundary | Implementation |
+| :--- | :--- |
+| **Account isolation** | Separate private profile directories, SQLite state, sessions, and Keychain namespaces. |
+| **Credential handling** | macOS Keychain for API credentials; no plaintext configuration fallback. |
+| **Local IPC** | Typed, bounded JSON-lines messages over owned subprocess pipes; no HTTP server. |
+| **Managed delivery** | Explicit group approval, fresh account/permission checks, exact confirmation, and persistent deduplication. |
+| **Uncertain outcomes** | No automatic retries for uncertain sends, edits, or deletes. |
+| **Rate limits** | FloodWait deadlines are respected and persisted; no evasion or uncontrolled bulk sending. |
+| **Local privacy** | Private file permissions and sanitized diagnostics; sensitive caches and backups still require protection. |
 
-## Architecture
+**Keep `.session` files private.** They are authentication credentials and must never be committed, uploaded, or included in screenshots. See [SECURITY.md](SECURITY.md) and [message action semantics](docs/MESSAGE_ACTIONS.md).
+
+## Under the hood
 
 ```mermaid
-flowchart TD
-    Views[Native SwiftUI views] --> Model[MainActor AppModel]
-    Model --> Transport[Actor-owned subprocess transport]
-    Transport <-->|Bounded typed JSON-lines over owned pipes| IPC[Python IPC service]
-    IPC --> Profiles[Account profile registry and operation lock]
-    Profiles --> Service[Existing Telegram service and chat features]
-    Service --> Telethon[Telethon / asyncio]
-    Telethon <-->|Telegram MTProto| Telegram[Telegram API]
-    Profiles --> SQLite[Per-profile SQLite / delivery ledger]
-    Profiles --> Sessions[Per-profile private session files]
-    Profiles --> Keychain[Directory-scoped macOS Keychain items]
-    CLI[Existing CLI] --> Service
+flowchart LR
+    UI["SwiftUI + AppKit<br/>Native macOS interface"]
+    VM["AppModel<br/>State and navigation"]
+    IPC["Typed JSON-lines<br/>Owned subprocess"]
+    PY["Python service<br/>asyncio + Telethon"]
+    TG["Telegram<br/>MTProto API"]
+    DATA[("Per-account<br/>SQLite + sessions")]
+    KC["macOS Keychain"]
+    CLI["Maintenance CLI"]
+
+    UI --> VM --> IPC --> PY <--> TG
+    PY <--> DATA
+    PY <--> KC
+    CLI --> PY
 ```
 
-There is no HTTP listener, Electron, browser-based UI or separate Swift Telegram implementation. See [ARCHITECTURE.md](docs/ARCHITECTURE.md), [IPC.md](docs/IPC.md) and [MULTI_ACCOUNT.md](docs/MULTI_ACCOUNT.md).
+| Layer | Technology | Responsibility |
+| :--- | :--- | :--- |
+| Desktop | **Swift, SwiftUI, AppKit** | Native UI, windows, menus, accessibility, file dialogs |
+| Application bridge | **Typed subprocess IPC** | Request/response transport, events, lifecycle, cancellation |
+| Telegram service | **Python 3.13+, asyncio, Telethon 1.45.x** | Authentication, dialogs, messages, permissions, updates |
+| Persistence | **SQLite** | Cached state, drafts, approvals, ledgers, cooldowns |
+| Credentials | **macOS Keychain** | Account-scoped API secrets |
+| Verification | **Pytest, unittest, XCTest** | Mocked backend, IPC, account, and native behavior tests |
 
-| Technology | Role |
-| --- | --- |
-| Swift / SwiftUI / AppKit | Native windows, navigation, tables, menus, file panels and accessibility semantics |
-| Python 3.13+ / asyncio | Reusable backend and serialized asynchronous operations |
-| Telethon 1.45.x tested; dependency constrained below 2 | Supported Telegram MTProto authentication and requests |
-| SQLite | Account-scoped caches, drafts, approvals, cooldowns and atomic delivery reservations |
-| macOS Keychain | API credential storage without plaintext configuration fallback |
-| Pytest / unittest / XCTest | Mocked backend, security, IPC and native state/transport verification |
+No Electron, webview-based application shell, or unauthenticated local web server is required. Architecture details: [ARCHITECTURE.md](docs/ARCHITECTURE.md) · [IPC.md](docs/IPC.md) · [backend lifecycle](docs/BACKEND_LIFECYCLE.md).
 
-## Security and privacy
+## Project status
 
-- Existing credentials, account binding, sessions and databases are preserved.
-- Additional accounts have independent private session/database directories and Keychain namespaces.
-- Strict IPC validates methods, types, sizes and identifiers; it cannot execute arbitrary commands.
-- Secrets never return through status responses or diagnostic export.
-- Exact destination confirmation, fresh identity checks and atomic deduplication precede delivery.
-- Telegram rate limits and restrictions are respected. No automatic bulk messaging, forwarding or uncertain-delivery retries.
-- Drafts, dialog previews and delivery previews are sensitive local plaintext protected by file permissions; backups require the same care.
+**Current preview:** `v0.4.0` · **V3**
 
-The development configuration is not App-Sandbox-contained. No session or credential export is provided. Telegram Manager is an independent third-party client, not affiliated with Telegram. Read [SECURITY.md](SECURITY.md) before reporting vulnerabilities.
+The latest supplied project report records:
 
-## Testing and release status
+| Check | Result |
+| :--- | :--- |
+| Python | **299 tests + 133 subtests passed** |
+| Native Swift | **86 XCTest tests passed** |
+| Debug / Release | **Builds and strict signatures passed** |
+| Interactive GUI acceptance | **Unverified in managed environment** |
+| Screenshot capture | **Not completed** |
+| Live Telegram acceptance | **Not performed in automated development** |
+| Standalone distribution | **Not ready** — project `.venv` still required |
 
-Current verification: **216 Python tests, 59 subtests and 44 Swift tests passed**. Debug and Release builds succeeded and pass strict code-signature verification. Exact evidence, failures and blockers are recorded in [VALIDATION.md](docs/VALIDATION.md).
+> [!WARNING]
+> Passing tests and a successful build do **not** prove that every screen launches and behaves correctly on a real Mac. The managed environment reported `testmanagerd` error **159** and Launch Services **-10827** / process exit **-6**. Follow [VALIDATION.md](docs/VALIDATION.md) and [UI_VALIDATION.md](docs/UI_VALIDATION.md) for evidence and local acceptance steps.
 
-| Quality gate | Evidence |
-| --- | --- |
-| Backend / IPC / account isolation | Mocked tests; current counts in the validation report |
-| Native unit/integration tests | XCTest results in the validation report |
-| Debug / Release compilation | Actual Xcode build results reported separately from launch |
-| Interactive launch / screenshots | Not inferred from compilation; see [UI_VALIDATION.md](docs/UI_VALIDATION.md) |
-| Live authentication / sending | Not performed during automated development |
-| Distribution readiness | Incomplete; external Python dependency and release acceptance work remain |
+### Run checks locally
 
 ```bash
 .venv/bin/python -m pytest -q
@@ -202,57 +200,81 @@ Current verification: **216 Python tests, 59 subtests and 44 Swift tests passed*
 ./macos/build.sh Release
 ```
 
-Automated tests must use fixtures and isolated temporary storage. They must never send real Telegram messages. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Use fixtures and isolated test storage; automated tests must not send live Telegram messages.
 
-## Performance approach
+## What's next
 
-Lightweight discovery avoids per-group detail calls. Cached views use SQLite; histories paginate; inspection batches, protocol queues and media downloads are bounded. No continuous Telegram polling or simultaneous account-scanning loop is introduced.
+| Stage | Focus |
+| :--- | :--- |
+| **Now · Acceptance** | Verify interactive launch, complete screenshot matrix, fix remaining UI issues, test accessibility and real-account flows with explicit authorization. |
+| **Next · Distribution** | Bundle a verified Python runtime, sign/notarize the release, build a DMG, and validate on a clean Mac. |
+| **Later · Messaging depth** | Expand supported media and actions, profile photo caching, synchronized folders, and applicable sponsored-content handling. |
+| **Ongoing · Quality** | Benchmark startup, memory, responsiveness, and live Telegram behavior without overstating results. |
 
-Run the synthetic local-cache benchmark with `.venv/bin/python scripts/benchmark_cache.py`. Its output describes only that offline workload, not GUI RAM, launch time or live Telegram throughput. No idle CPU/RAM or Apple Silicon speed claims are made without measurements.
-
-## Project layout
-
-```text
-macos/
-  TelegramManager.xcodeproj/    Native application project
-  TelegramManager/              App, views, view model, models, transport, resources
-  TelegramManagerTests/         Native model and transport tests
-src/telegram_manager/           Existing backend, CLI and IPC extensions
-tests/                          Mocked Python and subprocess integration tests
-docs/                           Architecture, usage, security boundaries and validation
-scripts/                        Build and offline benchmark tools
-main.py                         CLI launcher
-pyproject.toml                  Declared Python dependencies
-```
+These are engineering goals, not promised release dates. See the [V3 delivery report](docs/V3_REPORT.md) and [full UI audit](docs/FULL_UI_AUDIT.md).
 
 ## Troubleshooting
 
-| Problem | Safe next step |
-| --- | --- |
-| App will not open / Launch Services error | Verify the signed bundle and follow [desktop diagnostics](docs/DESKTOP.md); do not delete sessions |
-| Python runtime missing | Restore the project's Python 3.13 `.venv`; reconnect from the app after setup |
-| Backend unavailable | Use reconnect/recovery; verify runtime and close another CLI/backend owning the profile |
-| Invalid or expired code | Correct the code or restart the phone/code step when expiry is reported |
-| Two-step verification failure | Retry the account's password; never put it in logs or issue reports |
-| FloodWait | Wait for the saved deadline, then explicitly resume |
-| Permission unknown | Run a bounded explicit inspection; hidden rules can remain unknown |
-| Session restoration failure | Reauthenticate the same profile; do not reset its database or copy another account's session |
-| Keychain access denied | Unlock Keychain and review its permission prompt; no plaintext-secret workaround is provided |
+<details>
+<summary><strong>“Another instance is running”</strong></summary>
 
-For diagnostic reports, share only sanitized exports and reproducible fixture steps—not account databases or session files.
+Quit the known competing CLI or desktop instance, open **View Diagnostics**, then use the app's reconnect action. Do **not** delete `manager.lock`, session files, or databases to silence the error. Read [BACKEND_LIFECYCLE.md](docs/BACKEND_LIFECYCLE.md).
 
-## Roadmap
+</details>
 
-**Implemented:** native backend integration, cached group management, controlled messaging, isolated account profiles, bounded conversation reads and private local drafts.
+<details>
+<summary><strong>The app does not open</strong></summary>
 
-**Acceptance work:** interactive launch investigation, full UI screenshot matrix, accessibility and clean-Mac verification, live account acceptance under explicit authorization.
+Confirm Xcode, the signed build, and the repository's Python virtual environment are available. Follow [desktop diagnostics](docs/DESKTOP.md) and [UI validation](docs/UI_VALIDATION.md). Do not reset your account data as a first step.
 
-**Planned:** verified embedded Python runtime, signed/notarized distribution, DMG installer, update/rollback strategy, richer media/actions, cached profile photos and broader performance benchmarking. Planned features are not release promises.
+</details>
 
-## Contributing, licensing and author
+<details>
+<summary><strong>Groups show “Unknown” permissions</strong></summary>
 
-Start with [CONTRIBUTING.md](CONTRIBUTING.md). Security reporting guidance is in [SECURITY.md](SECURITY.md); no unverified contact address is published.
+Discovery intentionally gathers lightweight metadata. Run an explicit bounded permission inspection. Hidden group moderation rules may remain unknown even after inspection.
 
-**Licensing has not yet been specified.** No repository license file is present; public visibility is not an open-source license.
+</details>
 
-Project repository: [NipunChamodya/Telegrame-automator](https://github.com/NipunChamodya/Telegrame-automator). Developer GitHub identity: [@NipunChamodya](https://github.com/NipunChamodya). Built using Apple's native frameworks, Python, Telethon and SQLite; no affiliation or sponsorship is implied.
+<details>
+<summary><strong>Telegram requests a wait period</strong></summary>
+
+Respect the saved FloodWait deadline. Do not repeatedly reconnect or retry to evade Telegram limits.
+
+</details>
+
+For more: [User guide](docs/USER_GUIDE.md) · [CLI guide](docs/CLI_GUIDE.md) · [Desktop setup](docs/DESKTOP.md).
+
+## Documentation
+
+| Guide | Covers |
+| :--- | :--- |
+| [User guide](docs/USER_GUIDE.md) | Setup, account connection, and everyday workflows |
+| [Architecture](docs/ARCHITECTURE.md) | Components, storage, and service design |
+| [IPC protocol](docs/IPC.md) | Native-to-Python communication |
+| [Multi-account model](docs/MULTI_ACCOUNT.md) | Profile isolation and account lifecycle |
+| [Client feature boundaries](docs/CLIENT_FEATURES.md) | Supported and intentionally unavailable features |
+| [Security policy](SECURITY.md) | Privacy controls and vulnerability reporting |
+| [Validation](docs/VALIDATION.md) | Automated checks and unresolved acceptance gates |
+| [UI validation](docs/UI_VALIDATION.md) | Graphical testing and screenshot capture |
+| [Contributing](CONTRIBUTING.md) | Development and testing conventions |
+
+## Contributing
+
+Bug reports, reproducible UI issues, documentation improvements, and well-scoped contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md). **Never include phone numbers, API hashes, session files, private chats, or account databases in an issue.**
+
+**License:** Not yet specified. Until a license is added, public repository visibility does not grant open-source reuse rights.
+
+---
+
+<div align="center">
+
+**Crafted for macOS. Built with explicit control.**
+
+Developed by **[Nipun Chamodya](https://github.com/NipunChamodya)**
+
+[Repository](https://github.com/NipunChamodya/Telegrame-automator) · [Report an issue](https://github.com/NipunChamodya/Telegrame-automator/issues) · [Read the docs](docs/USER_GUIDE.md)
+
+<sub>Unofficial Telegram Manager is an independent project and is not endorsed by or affiliated with Telegram.</sub>
+
+</div>

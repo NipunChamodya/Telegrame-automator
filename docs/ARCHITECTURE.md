@@ -32,11 +32,27 @@ The numbered CLI remains a second presentation layer over the same Python module
 
 The runtime source of truth is Python. GUI state derives from responses rather than hardcoded counts. Switching context, connection recovery and account-profile operations must use the service contract rather than changing active account fields in Swift alone.
 
+## V3 client components
+
+The accepted [architecture decision](CLIENT_ARCHITECTURE_DECISION.md) retains Telethon and existing session files. Swift is still presentation, not a second Telegram implementation.
+
+- `update_pipeline.py`: one current-client event adapter with profile/account/generation and stream identity; serialized bounded projections, gap detection, watch/snapshot/read/typing routes and conservative invalidation.
+- `content_policy.py`, `message_projection.py`: verified peer/message scope, protected/unsupported/sponsored-content gates, bounded safe rich metadata and explicit unknowns.
+- `conversation_actions.py`: fresh own-plaintext checks, exact one-use previews and additive `conversation_operations` ledger; does not change send reservations.
+- `client_features.py`: account-scoped contacts/folder caches and explicit authorized profile reads. No participant enumeration or remote folder mutation.
+- `media_preview.py`: explicit JPEG/PNG download, scoped tokens, private bounded files, crash-index ownership and invalidation. Preview bytes are sensitive local plaintext.
+
+The update adapter never fetches full history/participants/media in callbacks. Control-event overflow fails the transport rather than silently losing a deletion. The native projection bounds loaded messages at 200, guards late snapshots against newer events, and clears unsafe content on gaps/disconnect/account changes. A bounded snapshot does not certify complete Telegram synchronization. Read frontiers derive from actual visible incoming messages; typing reflects focused user edits. See [CHAT_API.md](CHAT_API.md).
+
+Original tables remain unchanged. New derived `contact_cache` and `telegram_folder_cache` tables are additive; `conversation_operations` records action digests/status without message bodies. No session conversion, original-ledger reset or account-binding migration occurs.
+
 ## Native application
+
+The UI repair uses one root-owned native `HSplitView` for persistent application navigation and content. Chats adapts its conversation list/detail within that content region. One root toolbar belongs to the native unified titlebar; page searches are inline. Group details use a sheet, not an additional adaptive navigation column. SceneStorage restores only the local screen identifier once; no send preview or remote action is restored. See [FULL_UI_AUDIT.md](FULL_UI_AUDIT.md).
 
 `BackendClient` is an actor managing one `Process`, bounded framing, request continuations, deadlines, cancellation and process-generation checks. Backend stderr is drained without retaining arbitrary library logs. SIGPIPE/EOF/termination paths are treated as process/transport failures, never as permission to replay an operation.
 
-`AppModel` lives on the main actor. It maps protocol results to observable screen state and clears/invalidate previews as their inputs change. `Views` use native navigation, tables, text editors, sheets and semantic status labels. Expensive I/O stays outside the UI actor. Liquid Glass is availability-gated and applied selectively; tables and long text retain readable native surfaces.
+`AppModel` lives on the main actor. It maps protocol results to observable screen state and clears/invalidate previews as their inputs change. `LiveProjection`, `MessagePresentation`, `ClientFeatures` and `ImagePreviewReader` separate bounded client state and off-main image validation from screen presentation. `Views` use native navigation, tables, text editors, sheets and semantic status labels. Expensive I/O stays outside the UI actor. Liquid Glass is availability-gated and applied selectively; tables and long text retain readable native surfaces.
 
 The source tree separates `App`, `Models`, `Services`, `ViewModels`, `Views` and `Resources`. Runtime lookup prefers a bundled runtime when genuinely present, then the explicitly configured development checkout. A venv elsewhere on disk is not a portable distribution runtime.
 

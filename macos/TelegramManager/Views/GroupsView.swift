@@ -6,6 +6,12 @@ struct GroupsView: View {
     let inspectionMode: Bool
     var body: some View {
         VStack(spacing: 0) {
+            PageHeader(title: inspectionMode ? "Permissions" : "Group management", subtitle: inspectionMode ? "Inspect a bounded selection. Cached permissions never authorize sending." : "Discover joined groups and review account-specific metadata.", symbol: inspectionMode ? "checkmark.shield" : "person.3").padding(16)
+            HStack {
+                SearchToolbar(text: $model.search, prompt: "Search name, username or Telegram ID")
+                    .accessibilityIdentifier("groupSearch")
+                Button("Discover Groups") { model.discover() }.disabled(model.busy || !model.connected)
+            }.padding(.horizontal, 16).padding(.bottom, 8).fixedSize(horizontal: false, vertical: true)
             ScrollView(.horizontal, showsIndicators: false) {
             HStack {
                 Picker("Permission", selection: $model.permissionFilter) { Text("All permissions").tag("all"); Text("Allowed").tag("allowed"); Text("Restricted").tag("denied"); Text("Unknown").tag("unknown") }.frame(width: 165)
@@ -23,6 +29,7 @@ struct GroupsView: View {
                     Button(model.selectedInspection.isEmpty ? "Inspect Pending" : "Inspect Selected") { model.inspectPending() }.disabled(!model.canInspect).buttonStyle(.borderedProminent)
                 }.padding(.horizontal, 16).padding(.bottom, 14)
             }
+            CachedReadStatus(model: model, screen: inspectionMode ? .permissions : .groups, retry: { Task { await model.loadGroups() } }).padding(.horizontal, 16)
             Divider()
             if model.groups.isEmpty {
                 ContentUnavailableView {
@@ -53,14 +60,15 @@ struct GroupsView: View {
                 Button { model.page += 1; Task { await model.loadGroups() } } label: { Image(systemName: "chevron.right") }.disabled((model.page + 1) * model.pageSize >= model.totalGroups || model.busy).help("Next group page").accessibilityLabel("Next group page")
             }.padding(12)
         }
-        .searchable(text: $model.search, prompt: "Search name, username or Telegram ID")
         .onChange(of: model.search) { _, _ in model.scheduleSearch() }
         .onChange(of: model.permissionFilter) { _, _ in model.scheduleSearch() }
         .onChange(of: model.kindFilter) { _, _ in model.scheduleSearch() }
         .onChange(of: model.sort) { _, _ in model.scheduleSearch() }
         .onChange(of: model.selectedInspection) { _, ids in model.select(ids.first) }
-        .inspector(isPresented: Binding(get: { model.detail != nil }, set: { if !$0 { model.detail = nil } })) {
-            if let group = model.detail { GroupInspector(model: model, group: group).inspectorColumnWidth(min: 260, ideal: 300, max: 380) }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sheet(item: $model.detail) { group in
+            GroupInspector(model: model, group: group).frame(minWidth: 380, idealWidth: 440, maxWidth: 560, minHeight: 400, idealHeight: 620)
+                .accessibilityIdentifier("groupInspector")
         }
         .task { await model.loadGroups() }
     }

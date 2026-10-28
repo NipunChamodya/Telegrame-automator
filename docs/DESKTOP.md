@@ -12,7 +12,7 @@ cd ~/Desktop/TelegramManager
 open macos/build/Build/Products/Debug/TelegramManager.app
 ```
 
-If the build-script name/output changes, use the exact command in the project README. The Xcode project is `macos/TelegramManager.xcodeproj`, scheme `TelegramManager`, configurations Debug and Release. Its bundle identifier is `org.telegram-group-manager.mac`; display name is Telegram Group Manager. The app is arm64. UI materials fall back to standard native controls on earlier supported macOS versions.
+If the build-script name/output changes, use the exact command in the project README. The Xcode project is `macos/TelegramManager.xcodeproj`, scheme `TelegramManager`, configurations Debug and Release. Its bundle identifier is `org.telegram-group-manager.mac`; display name is Unofficial Telegram Manager. The app is arm64. UI materials fall back to standard native controls on earlier supported macOS versions.
 
 The local build locates `.venv/bin/python` through its compiled development-root setting (or an explicit `TGM_PROJECT_ROOT`). Python source is bundled as app resources. The app starts `python -u -m telegram_manager.ipc` with private owned pipes and `PYTHONPATH` pointing at backend resources. It does not require a separately running CLI. Quit the CLI before launching the GUI: the shared exclusive application lock prevents concurrent backend owners of one session/database.
 
@@ -36,6 +36,10 @@ No session migration, account reset or database replacement is performed. The `d
 The same native macOS Keychain service and directory-scoped item naming are reused for the original account. Additional profiles receive their own directory-scoped items, session, SQLite file and desktop settings. The new `account-profiles.json` registry selects an active profile without moving the original files; see [MULTI_ACCOUNT.md](MULTI_ACCOUNT.md). The GUI can collect API credentials, phone, verification code and 2FA password through private IPC; secret fields are cleared after submission and never returned by the backend. A new verified account must be explicitly bound. A different existing account binding is rejected.
 
 SQLite backups use its backup API, include committed WAL contents and pass an integrity check. Backup files are private (0600), must be new filenames, and exclude session/Keychain credentials. They may contain drafts, previews and destination metadata. Restore only with the application stopped and preserve the session and binding separately in a secure full-directory backup. Diagnostic export contains versions, architecture, cache policy and security flags, with no account identifiers, message bodies, group names, credential contents or network traces.
+
+## V3 client boundaries
+
+Chats is now the default workspace. Supported private/group conversations use one bounded event pipeline; gaps clear stale content and require an explicit snapshot repair. Channel/bot identities are visible but content is gated pending sponsored-content integration. Own personal plaintext actions and explicit bounded JPEG/PNG previews are additive. Contacts/profile reads and read-only folder definitions are available; no remote folder modification or avatar downloading is claimed. See [CLIENT_FEATURES.md](CLIENT_FEATURES.md), [MESSAGE_ACTIONS.md](MESSAGE_ACTIONS.md), and [CLIENT_ARCHITECTURE_DECISION.md](CLIENT_ARCHITECTURE_DECISION.md).
 
 ## Workflow
 

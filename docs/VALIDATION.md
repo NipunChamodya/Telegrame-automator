@@ -1,4 +1,59 @@
-# Telegram Manager V2 — implementation and validation report
+# V3 implementation and validation — 0.4.0
+
+Validated 2026-10-28 on macOS 26.6.2 arm64, Python 3.13.4, Telethon 1.45.0 (layer 229), Xcode 27.1 / Swift 6.4. The following current results supersede the clearly historical V2 sections below.
+
+**This is an implemented, offline-tested V3 subset, not full Telegram parity, a verified live client, or a production/distribution approval.** Existing user sessions, original databases, credentials, account bindings and private lock paths were preserved. No live authentication, reading, send, edit, delete, logout, contact refresh or account removal was performed.
+
+## Full UI repair follow-up
+
+The subsequent complete source audit repaired the shared window shell, page-owned search/inspector coupling and draft/history dependency. Native tests increased from 76 to **86**, including ten new regression cases; all 14 graphical test methods compile. Python remains **299 tests + 133 subtests**. See [FULL_UI_AUDIT.md](FULL_UI_AUDIT.md). The current quality gates below supersede the earlier V3 feature-milestone counts.
+
+## Current quality gates
+
+| Gate | Actual result |
+| --- | --- |
+| Complete Python suite | **PASSED: 299 tests + 133 subtests**, zero failures, 6.67 s (`pytest -q`) |
+| Python syntax | **PASSED:** compileall main/src/tests/scripts |
+| Native unit/integration tests | **PASSED: 86 tests**, zero failures, 13.944 s; real XCTest execution, mocked/offline backend |
+| UI-test target compilation | **PASSED:** Debug test build; 14 XCUITest methods include shared-shell/titlebar-clearance cycles, window resize/minimize/restore, account-switch draft preservation, Contacts refresh and history loading/error fixtures |
+| Graphical XCUITest | **BLOCKED:** runner bootstrap failed; `com.apple.testmanagerd.control` lookup error **159 — Sandbox restriction**; command exit 133, zero graphical assertions claimed |
+| Debug application | **PASSED:** Xcode arm64 build, `BUILD SUCCEEDED` |
+| Release application | **PASSED:** Xcode arm64 build, `BUILD SUCCEEDED` |
+| Strict bundle signing | **PASSED:** `codesign --verify --deep --strict` for both products; ad-hoc development signatures, not Developer ID/notarization |
+| Bundle identity/runtime resources | **PASSED:** executable exists and is executable, arm64, display name Unofficial Telegram Manager, version 0.4.0; all 29 bundled Python module bytes match source in each product |
+| Private bundle filename audit | **PASSED:** zero `.session`, `.sqlite3`, `.db` or `.env` candidates under either Resources tree; not a general proof that arbitrary strings can never contain secrets |
+| Actual graphical launch | **BLOCKED / NOT VERIFIED:** isolated DEBUG fixture direct executable exited -6; `open -n` returned -10827 despite the verified present executable. No observed app window |
+| Screenshots/visual inspection | **NOT RUN:** zero captured screenshots, zero animations; no generated replacement imagery |
+| Ruff | **NOT RUN:** no executable/module installed in the existing environment; packages were not installed for this gate |
+| Static documentation/whitespace | **PASSED:** local link/image/alt-text checker and `git diff --check`; no GitHub-rendered visual claim |
+| Live Telegram acceptance | **NOT RUN:** every Telegram operation in tests is mocked |
+| Portable distribution | **INCOMPLETE:** checkout venv required; embedded runtime, licensing/release notices, Developer ID, notarization, clean-Mac and live/UI acceptance remain |
+
+Reproducible commands are in [DESKTOP.md](DESKTOP.md), [UI_VALIDATION.md](UI_VALIDATION.md) and [V3_TEST_PLAN.md](V3_TEST_PLAN.md). Temporary run evidence: `/private/tmp/tgm-full-ui-python.log`, `/private/tmp/tgm-full-ui-final-native.log`, `/private/tmp/tgm-full-ui-debug.log`, `/private/tmp/tgm-full-ui-release.log`, `/private/tmp/tgm-full-ui-graphical.log`. These are local run artifacts, not committed fabricated CI logs. The failed graphical result bundle is under ignored `macos/build/UI-light-20261028-204439.xcresult`.
+
+## Implemented milestones and evidence boundaries
+
+- **M0:** official applications/source/API-terms study, feature baseline and Telethon/TDLib decision; no proprietary source/assets copied. Web app live UI could not be inspected through the text/browser interface.
+- **M1:** messaging-first launch/navigation, adaptive full-height conversation workspace, Advanced Workspace, Unofficial prefix and original purple bubble/check native icon. Bundle/storage/Keychain identifiers unchanged.
+- **M2:** one account/profile/generation/stream-scoped bounded update adapter; supported message/edit/delete/read/typing projection, no polling loop, fail-closed content/peer checks, gap handling and explicit snapshots. Native viewport-based read reporting and genuine focused typing. Snapshots are bounded views, not complete synchronization guarantees.
+- **M3:** exact confirmed own-plaintext personal edit/delete-for-me, separate durable uncertainty/deduplication ledger, rich verified metadata and safe formatting. No delete-for-everyone, group editing or general forwarding workflow.
+- **M4:** explicit cached contacts, verified profile metadata, read-only folder definitions and bounded private JPEG/PNG previews; ImageIO tests actually decode synthetic image bytes and reject unsafe files/dimensions. No avatar bytes, full folder membership, remote folder mutation, uploads or general rich-media playback.
+
+New adversarial tests exercise wrong peer/account/message, stale/expired tokens, unknown/protected content, false read/typing acknowledgement, queued updates and deletions, stream gaps, stale snapshots, pending-download invalidation, manifest traversal/substituted inodes/hardlinks, file limits, interrupted actions and original ledger preservation. Existing authentication, locks/lifecycle, Unicode, group discovery, permission, cooldown and account-isolation tests still pass. Real subprocess tests use isolated temporary installations; they never load the personal session.
+
+Additive tables: `conversation_operations` (no message bodies), `contact_cache`, `telegram_folder_cache`. Original records/constraints are untouched. Profile directories and Keychain naming are unchanged. Cache-index recovery is deliberately conservative, not a destructive broad file scan. Backend preview expiration is lazy and cleanup is best-effort; no secure-erasure guarantee.
+
+## Measured offline workload
+
+`python scripts/benchmark_cache.py` with the project venv: 1,000 synthetic Unicode dialogs, 100 page reads of 50 rows, **median 9.055 ms, p95 10.512 ms**, Python tracemalloc peak **101,600 bytes**, **zero Telegram calls**. This includes Python allocation tracing overhead and describes only this run's SQLite workload. It is not a before/after speedup, process RSS, GPU/CPU-idle, launch-time or live-network benchmark. No numerical performance improvement is claimed. Operational reductions are explained: lightweight discovery avoids per-row detail RPCs; update callbacks do not fetch full entities/media/history; cached navigation does not rescan dialogs.
+
+## Remaining acceptance work
+
+The owner reports the app opens and connects on their Mac; that is distinct from an observed run in this environment. Run fixture UI captures locally and inspect all appearances/sizes, VoiceOver, contrast, reduced motion, keyboard focus and scrolling. Then perform explicitly authorized live read/authentication/update acceptance without unsolicited sends. Channel/bot content remains gated pending sponsored-message functionality. Calls, secret chats, stories, full media, uploads, full folders/cloud drafts and broader messaging mutations remain incomplete. See [current parity](TELEGRAM_REFERENCE_STUDY.md), [feature feasibility](TELEGRAM_FEATURE_FEASIBILITY.md) and [client boundaries](CLIENT_FEATURES.md).
+
+---
+
+# Historical V2 implementation and validation report
 
 Latest responsive repair: **216 Python tests + 59 subtests, 44 native tests passed**. Graphical assertions/screenshots remain blocked; see the latest section below.
 

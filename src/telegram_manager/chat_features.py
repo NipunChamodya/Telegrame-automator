@@ -1,6 +1,6 @@
 """Explicit bounded conversation reads and single-destination personal messaging.
 
-No live update subscription, automatic history downloads or media downloads.
+Live updates use the separate bounded projection; history/media remain explicit.
 Managed groups retain their separate approval and permission workflow.
 """
 import os
@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 from telethon import errors, functions, types, utils
 
 from .chat_store import ChatStore
+from .content_policy import classify_entity, require_content_peer, message_supported, fetch_scoped_message
+from .message_projection import normalize_message
 from .messaging import message_units, validate_message
 from .terminal import clean_text
 
@@ -69,7 +71,7 @@ class ChatFeatures:
         cached = self.store().get(account, destination)
         if cached is None or cached['kind'] not in ('private','saved'):
             raise IPCError('managed_destination', 'Choose a cached personal chat or Saved Messages. Groups require the managed composer approval workflow.')
-        peer = await self.backend.client.get_entity(destination)
+        peer = await require_content_peer(self.backend.client, account, destination)
         if not isinstance(peer, types.User) or utils.get_peer_id(peer) != destination or getattr(peer, 'deleted', False):
             raise IPCError('destination_unavailable', 'This personal destination is unavailable. No message was sent.')
         return peer
@@ -78,13 +80,16 @@ class ChatFeatures:
         from .ipc import IPCError, boolean, fields, integer, string
         b = self.backend
         if method == 'chats.list':
-            fields(p, {'query','kind','page','size'})
+            fields(p, {'query','kind','page','size','sort'})
+            sort = string(p, 'sort', default='name', maximum=16)
+            if sort not in {'name', 'recent'}:
+                raise IPCError('invalid_params', 'Choose name or recent conversation ordering.')
             kind = string(p, 'kind', default='all', maximum=16)
-            if kind not in {'all','private','saved','group','supergroup','channel'}:
+            if kind not in {'all','private','saved','groups','group','supergroup','channel'}:
                 raise IPCError('invalid_params', 'Choose a supported chat type.')
             return self.store().page(b.account(), string(p,'query',default='',maximum=256), kind,
                                      integer(p,'page',default=0,minimum=0,maximum=100000),
-                                     integer(p,'size',default=50,minimum=1,maximum=100))
+                                     integer(p,'size',default=50,minimum=1,maximum=100), sort=sort)
         if method == 'chats.refresh':
             fields(p, {'limit', 'after'})
             limit = integer(p,'limit',default=100,minimum=1,maximum=100)
@@ -112,7 +117,10 @@ class ChatFeatures:
                         'last_message':clean_text(getattr(msg,'message','') or '')[:240],
                         'last_message_id':getattr(msg,'id',None),
                         'last_date':timestamp(getattr(msg,'date',None)),
-                        'archived':getattr(dialog,'archived',None), 'cached_at':time.time()}
+                        'archived':getattr(dialog,'archived',None), 'pinned':bool(getattr(dialog,'pinned',False)), 'cached_at':time.time(),
+                        **classify_entity(entity, account)}
+                if not data['content_available'] or not message_supported(msg):
+                    data['last_message'] = ''
                 self.store().save(account,data)
                 last_id = data['id']
                 count += 1
@@ -124,7 +132,8 @@ class ChatFeatures:
             account = await self.identity()
             data = {'id': account, 'name': 'Saved Messages', 'kind': 'saved',
                     'username': None, 'unread_count': 0, 'last_message': '',
-                    'last_date': None, 'archived': False, 'cached_at': time.time()}
+                    'last_date': None, 'archived': False, 'cached_at': time.time(),
+                    'content_known': True, 'content_available': True, 'content_reason': None, 'is_bot': False}
             self.store().save(account, data)
             return {'chat': data}
         if method == 'messages.list':
@@ -136,19 +145,17 @@ class ChatFeatures:
             account = await self.identity()
             if self.store().get(account,destination) is None:
                 raise IPCError('destination_unavailable','Refresh chats and select an available conversation first.')
+            peer = await require_content_peer(b.client, account, destination)
+            kind = classify_entity(peer, account)['kind']
             messages=[]
             async for message in b.client.iter_messages(destination,limit=limit,offset_id=offset,search=search or None):
-                sender = getattr(message,'sender',None)
-                name = utils.get_display_name(sender) if sender is not None else 'Unknown sender'
-                media = None
-                file = getattr(message,'file',None)
-                if file is not None:
-                    media={'kind':'image' if getattr(message,'photo',None) else 'document',
-                           'name':clean_text(getattr(file,'name','') or ''),'size':getattr(file,'size',None)}
-                messages.append({'id':message.id,'text':clean_text(getattr(message,'message','') or '', multiline=True),
-                                 'sender_name':clean_text(name),'sender_id':getattr(message,'sender_id',None),
-                                 'date':timestamp(getattr(message,'date',None)),
-                                 'outgoing':bool(getattr(message,'out',False)),'media':media})
+                # Global non-channel getMessages IDs must never cross peers.
+                from telethon import utils as peer_utils
+                if getattr(message, 'peer_id', None) is None or peer_utils.get_peer_id(message.peer_id) != destination:
+                    raise IPCError('message_unavailable', 'History contained a message outside the selected conversation.')
+                messages.append(normalize_message(message, account, kind))
+            if b.updates is not None:
+                b.updates.record_visible(destination, messages)
             return {'messages':messages,'next_offset_id':messages[-1]['id'] if messages else offset,
                     'has_more':len(messages)==limit}
         if method == 'media.download':
@@ -161,7 +168,7 @@ class ChatFeatures:
                 raise IPCError('destination_unavailable', 'Select a cached conversation first.')
             if output.exists() or output.is_symlink() or not output.parent.is_dir():
                 raise IPCError('file_access', 'Choose a new filename in an existing folder. Existing files are never overwritten.')
-            message = await b.client.get_messages(destination, ids=message_id)
+            message = await fetch_scoped_message(b.client, account, destination, message_id)
             file = getattr(message, 'file', None)
             size = getattr(file, 'size', None)
             maximum = 64 * 1024 * 1024
@@ -222,9 +229,11 @@ class ChatFeatures:
             message=string(p,'message',maximum=16384);validate_message(message)
             reply=integer(p,'reply_to',default=0,minimum=0,maximum=2147483647)
             account=await self.identity(expected);await self.personal_peer(destination)
+            if reply:
+                await fetch_scoped_message(b.client, account, destination, reply)
             b.preview_tokens.clear();token=secrets.token_urlsafe(32);deadline=time.time()+120
             b.preview_tokens[token]={'kind':'personal','account':account,'destination':destination,
-                                     'message':message,'reply_to':reply,'deadline':deadline}
+                                     'message':message,'reply_to':reply,'deadline':deadline, **b.scope()}
             return {'token':token,'account_id':account,'destination':destination,'message':message,
                     'reply_to':reply,'confirmation':f'SEND {destination}','expires_at':deadline}
         if method=='chat.send':
@@ -233,12 +242,15 @@ class ChatFeatures:
             confirmation=string(p,'confirmation',maximum=80)
             preview=b.preview_tokens.pop(token,None)
             if (preview is None or preview.get('kind')!='personal' or preview['deadline']<time.time()
-                    or preview['account']!=b.account() or preview['account']!=expected):
+                    or preview['account']!=b.account() or preview['account']!=expected
+                    or preview.get('profile_id') != b.profile_id or preview.get('account_generation') != b.account_generation):
                 raise IPCError('preview_expired','Account or preview changed. Prepare and confirm a new preview.')
             destination=preview['destination']
             if confirmation!=f'SEND {destination}':
                 raise IPCError('confirmation_required','Enter the exact destination confirmation shown in the preview.')
             account=await self.identity(expected);peer=await self.personal_peer(destination)
+            if preview['reply_to']:
+                await fetch_scoped_message(b.client, account, destination, preview['reply_to'])
             delivery,random_id=b.store.reserve(account,destination,preview['message'])
             summary=clean_text(' '.join(preview['message'].splitlines()))
             summary=summary[:160]+('…' if len(summary)>160 else '')

@@ -12,7 +12,7 @@ struct AuthenticationView: View {
     @State private var showPassword = false
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            HStack { Image(systemName: "lock.shield.fill").font(.largeTitle).foregroundStyle(.blue); VStack(alignment: .leading) { Text("Connect Telegram").font(.title.weight(.semibold)); Text("Your existing session and records remain private.").foregroundStyle(.secondary) } }
+            HStack { Image(systemName: "lock.shield.fill").font(.largeTitle).foregroundStyle(.blue); VStack(alignment: .leading) { Text("Connect Telegram").font(.title.weight(.semibold)); Text("Uses the Telegram API. Independent and unofficial; your session and records remain private.").foregroundStyle(.secondary) } }
             switch model.authStage {
             case "credentials":
                 Text("Create your own application at the official Telegram portal. Sign in, open API development tools, and select Desktop if offered. Use a personal API ID and API Hash, not a bot token.").font(.callout)

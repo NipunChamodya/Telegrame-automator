@@ -1,4 +1,32 @@
-# Native UI validation
+# V3 graphical validation status — 2026-10-28
+
+**BLOCKED, not visually verified.** The current arm64 Debug/Release applications build and pass strict signature checks. The V3 screenshot run (`./macos/screenshots.sh light standard`) compiled its tests but failed to establish runner communication: `com.apple.testmanagerd.control` lookup **159 — Sandbox restriction**. Exit 133; no UI assertion or screenshot capture is counted as passed. An isolated fixture direct launch exited -6; `open -n` returned -10827. The executable exists, is executable and has the correct bundle binding. Earlier independent minimal-app registration reproduction remains relevant; no signing/lock deletion workaround was applied.
+
+No actual screenshots were captured or inspected; no before/after visual comparison, Light/Dark readability, fullscreen, VoiceOver, high-contrast or reduced-motion result is claimed. Decoder-generated image fixtures are tests, not app screenshots. The app owner reports successful GUI launch separately; this report does not turn that into our observed validation.
+
+V3 adds messaging-first navigation, scoped update/error states, rich metadata, plaintext-action confirmation/history, Contacts, profile and read-only folder sheets, plus an explicit JPEG/PNG viewer. Fourteen XCUITest methods compile. The complete shared-shell repair and screen-by-screen source findings are in [FULL_UI_AUDIT.md](FULL_UI_AUDIT.md). New graphical assertions cover every navigation cycle, native traffic-light clearance, resizing, minimize/restore, fixture account switching/draft preservation, Contacts refresh and loading/error states. Native state tests now total 86 passes; those are separate from the blocked graphical methods. New deterministic fixtures cover Contacts populated/empty, profile, folders populated/empty and a synthetic image viewer. The original navigation/authentication/error/geometry/search/pagination/empty-state scenarios remain. Tests disable the backend process and cannot access real Telegram data.
+
+## Full UI repair rerun
+
+The latest repair rerun compiled 14 graphical methods and again failed at testmanagerd lookup **159 — Sandbox restriction**, before any assertions. Evidence: ignored `macos/build/UI-light-20261028-204439.xcresult`, temporary `/private/tmp/tgm-full-ui-graphical.log`, command exit 133. The isolated DEBUG fixture direct executable exited -6 and `open` returned -10827. No screenshots were exported. All 86 native unit/integration tests executed separately and passed; they do not validate pixels or physical window interaction. See [FULL_UI_AUDIT.md](FULL_UI_AUDIT.md).
+
+## V3 required local review
+
+| Screen/workflow | Prepared evidence | Actual graphical outcome |
+| --- | --- | --- |
+| Chats / selected conversation / compact navigation | Synthetic 198-dialog list, Unicode rows, geometry/search/page/selection assertions | Blocked before runner startup |
+| Contacts / profile / folder definitions | Populated/empty cached fixtures, safe metadata, explicit-read labels | Blocked |
+| Image viewer | Synthetic image fixture, no real Telegram media | Blocked |
+| Message actions / Advanced Workspace | Exact own-text confirmation and operation-ledger screens, unit tests | Visual behavior not verified |
+| Login / account switch / group inspector / management tools | Existing synthetic screenshots and state fixtures | Blocked |
+| Light/Dark × compact/standard/large | Script parameters and local commands below | Not captured |
+| Fullscreen / accessibility / reduced motion / actual scroll feel | Manual procedure below | Not run |
+
+Capture only synthetic account data after unlocking the graphical Mac session. Preserve the `.xcresult`, export genuine attachments, inspect each image, and record filename/actual dimensions/defect/fix/retest. Do not publish a hero image until one exists and has been privacy-reviewed. See [V3_TEST_PLAN.md](V3_TEST_PLAN.md) and [VALIDATION.md](VALIDATION.md).
+
+---
+
+# Capture procedures and historical UI evidence
 
 The native application is a SwiftUI macOS application, with an AppKit subprocess and file-panel integration. Debug and Release builds use a real Xcode application target. `macos/screenshots.sh` drives the real application with XCUITest; it does not draw replacement screenshots.
 

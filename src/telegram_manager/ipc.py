@@ -30,6 +30,10 @@ from telethon import TelegramClient, errors, functions
 
 from .accounts import AccountRegistry, LEGACY, ProfileError
 from .chat_features import ChatFeatures
+from .client_features import ClientFeatures
+from .media_preview import MediaPreview
+from .conversation_actions import ConversationActions
+from .update_pipeline import UpdatePipeline
 from . import __version__
 from .cache import CachePolicy
 from .configuration import (
@@ -123,9 +127,9 @@ class Backend:
                'discover', 'inspect', 'inspect_pending', 'preview', 'send',
                'draft.save', 'approval.set', 'storage.backup', 'diagnostics.export', 'settings.update',
                'accounts.add', 'accounts.switch', 'accounts.disconnect', 'accounts.logout',
-               'accounts.remove', 'accounts.archive', 'accounts.restore'} | ChatFeatures.NETWORK
+               'accounts.remove', 'accounts.archive', 'accounts.restore'} | ChatFeatures.NETWORK | UpdatePipeline.NETWORK | ConversationActions.NETWORK | ClientFeatures.NETWORK | MediaPreview.NETWORK
     METHODS = NETWORK | {'health', 'status', 'settings', 'groups', 'detail', 'draft.get',
-                         'approvals', 'history', 'cancel', 'shutdown', 'accounts.list'} | ChatFeatures.METHODS
+                         'approvals', 'history', 'cancel', 'shutdown', 'accounts.list'} | ChatFeatures.METHODS | UpdatePipeline.METHODS | ConversationActions.METHODS | ClientFeatures.METHODS | MediaPreview.METHODS
     ALIASES = {'groups.list': 'groups', 'groups.get': 'detail', 'destinations.list': 'approvals'}
 
     def __init__(self, root: Path, store: Store, config: dict, *, client_factory=TelegramClient,
@@ -138,6 +142,8 @@ class Backend:
         self._profile_lock = profile_lock
         self.client_factory = client_factory
         self.emit = emitter or (lambda event: None)
+        self.emit_control = self.emit
+        self.updates = None
         self.policy = CachePolicy.from_environment()
         self.inspection_limit = 10
         preferences = root / 'desktop-settings.json'
@@ -161,6 +167,9 @@ class Backend:
         self.lock = asyncio.Lock()
         self.closing = False
         self.chats = ChatFeatures(self)
+        self.actions = ConversationActions(self)
+        self.features = ClientFeatures(self)
+        self.media = MediaPreview(self)
 
     @staticmethod
     def _validate_preferences(p: dict) -> None:
@@ -201,7 +210,20 @@ class Backend:
             self._profile_lock.__exit__(None, None, None)
             self._profile_lock = None
 
+    async def _stop_updates(self) -> None:
+        if self.updates is not None:
+            pipeline, self.updates = self.updates, None
+            await pipeline.stop()
+
+    def _close_media(self) -> None:
+        try:
+            self.media.close()
+        except OSError as exc:
+            LOG.info('MediaCleanup:%s', type(exc).__name__)
+
     async def _disconnect_profile(self) -> None:
+        self._close_media()
+        await self._stop_updates()
         self.preview_tokens.clear()
         self.service = None
         self.auth_stage = 'disconnected'
@@ -255,6 +277,9 @@ class Backend:
         self.profile_id, self._profile_lock = identity, lock
         self.account_generation += 1
         self.chats = ChatFeatures(self)
+        self.actions = ConversationActions(self)
+        self.features = ClientFeatures(self)
+        self.media = MediaPreview(self)
         previous.close()
 
     def account_list(self, *, include_archived: bool = False) -> dict:
@@ -368,6 +393,8 @@ class Backend:
         return callback
 
     async def _new_client(self, *, authentication: bool) -> None:
+        self._close_media()
+        await self._stop_updates()
         if self.client is not None:
             await self.client.disconnect()
             self.client = None
@@ -409,6 +436,8 @@ class Backend:
         self.service = TelegramService(self.client, self.store, restored)
         self.service.policy = self.policy
         self.auth_stage = 'connected'
+        self.updates = UpdatePipeline(self)
+        await self.updates.start()
         name = ' '.join(v for v in (getattr(restored, 'first_name', None), getattr(restored, 'last_name', None)) if v)
         self.registry.verify(self.profile_id, restored.id, name)
         return self.status()
@@ -464,6 +493,19 @@ class Backend:
             raise IPCError('profile', str(exc)) from None
 
     async def _dispatch(self, request_id: str, method: str, p: dict) -> dict:
+        if method in MediaPreview.METHODS:
+            return await self.media.dispatch(request_id, method, p)
+        if method in ClientFeatures.METHODS:
+            return await self.features.dispatch(request_id, method, p)
+        if method in ConversationActions.METHODS:
+            return await self.actions.dispatch(request_id, method, p)
+        if method in UpdatePipeline.METHODS:
+            self.connected_service()
+            self.require_cooldown_expired()
+            if self.updates is None:
+                self.updates = UpdatePipeline(self)
+                await self.updates.start()
+            return await self.updates.dispatch(request_id, method, p)
         if method in ChatFeatures.METHODS:
             return await self.chats.dispatch(request_id, method, p)
         if method.startswith('accounts.'):
@@ -663,6 +705,8 @@ class Backend:
         raise IPCError('unknown_method', 'This operation is not supported.')
 
     async def close(self) -> None:
+        self._close_media()
+        await self._stop_updates()
         self.preview_tokens.clear()
         self.phone = self.phone_code_hash = None
         self.credentials = None
@@ -685,8 +729,22 @@ class ProtocolServer:
         self.seen: set[str] = set()
         self.queue: asyncio.Queue[dict | None] = asyncio.Queue(maxsize=128)
         self.backend.emit = self.progress
+        self.backend.emit_control = self.control
+        self.failed = asyncio.Event()
         self.stopping = False
         self.output_available = True
+
+    def control(self, event: dict) -> None:
+        # Live deletions/read/sync events are not replaceable progress. If the
+        # receiver cannot keep up, close this transport and require a snapshot.
+        if self.stopping or not self.output_available:
+            return
+        try:
+            self.queue.put_nowait(event)
+        except asyncio.QueueFull:
+            self.output_available = False
+            self.failed.set()
+            LOG.info('ProtocolControlBackpressure')
 
     def progress(self, event: dict) -> None:
         if isinstance(event.get('data'), dict):
@@ -758,7 +816,8 @@ class ProtocolServer:
             await self.error(request_id, 'validation', 'Input is invalid or the requested operation is currently blocked. Check the selected fields and cooldown.')
         except OSError:
             if method in {'connect', 'auth.credentials', 'auth.phone', 'auth.code', 'auth.password',
-                          'auth.bind', 'discover', 'inspect', 'inspect_pending', 'preview', 'send'} | ChatFeatures.NETWORK:
+                          'auth.bind', 'discover', 'inspect', 'inspect_pending', 'preview', 'send'} | ChatFeatures.NETWORK | UpdatePipeline.NETWORK | ConversationActions.NETWORK | ClientFeatures.NETWORK | MediaPreview.NETWORK:
+                await self.backend._stop_updates()
                 self.backend.service = None
                 self.backend.auth_stage = 'disconnected'
                 self.backend.preview_tokens.clear()
@@ -828,11 +887,14 @@ class ProtocolServer:
     async def serve(self, reader: asyncio.StreamReader, *, parent_pid: int | None = None) -> None:
         parent = asyncio.create_task(wait_for_parent_exit(parent_pid)) if parent_pid is not None else None
         pump = asyncio.create_task(self.pump())
+        failed = asyncio.create_task(self.failed.wait())
         read_task = None
         try:
             while not self.stopping:
                 read_task = asyncio.create_task(reader.readline())
-                done, _ = await asyncio.wait({read_task, pump} | ({parent} if parent else set()), return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait({read_task, pump, failed} | ({parent} if parent else set()), return_when=asyncio.FIRST_COMPLETED)
+                if failed in done:
+                    break
                 if parent is not None and parent in done:
                     LOG.info('BackendParentExited')
                     break
@@ -869,6 +931,9 @@ class ProtocolServer:
         except (BrokenPipeError, ConnectionError):
             LOG.info('ProtocolPipeClosed')
         finally:
+            failed.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await failed
             if parent is not None:
                 parent.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

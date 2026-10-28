@@ -1,6 +1,6 @@
 # User guide
 
-Telegram Group Manager is a native macOS interface over the existing Python/Telethon application. It uses your personal account. Nothing discovers, inspects, approves destinations or sends messages merely because you open a screen.
+Unofficial Telegram Manager is a native macOS interface over the existing Python/Telethon application. It uses your personal account. Discovery, inspections, approvals and sends require explicit actions. Opening a supported conversation requests a bounded history page and subscribes to supported connected updates; visible reads and focused typing are reported normally.
 
 ## Launch the development app
 
@@ -80,7 +80,7 @@ Read each account-specific confirmation. Telegram logout requires `LOG OUT <prof
 
 Chats loads the cached conversation list first. Explicit refresh reads a bounded dialog page (up to 100), and selecting a conversation reads a bounded message page. Search/filter the cached list by conversation type or title. No detailed group permission requests happen merely because rows become visible.
 
-Personal chats and Saved Messages support text preview, exact confirmation, and optional reply-to message ID through the same persistent delivery ledger. Managed groups retain the approved-destination composer and fresh permission checks; personal-chat sending cannot bypass that workflow. Explicit media download accepts a selected message, a new destination filename and known files up to 64 MiB, without overwriting existing files. Edit, delete, forward, upload and avatar caching are not implemented.
+Personal chats and Saved Messages support text preview, exact confirmation, and optional reply-to message ID through the same persistent delivery ledger. Managed groups retain the approved-destination composer and fresh permission checks; personal-chat sending cannot bypass that workflow. Explicit media download accepts a selected message, a new destination filename and known files up to 64 MiB, without overwriting existing files. Own plain-text personal messages support Edit and Delete for Me with a separate exact confirmation. Forwarding, upload and avatar caching are not implemented.
 
 Saved drafts and send previews are different. A draft can be restored for composition; it never carries standing send permission. Conversation drafts support save, restore, list and delete, scoped to both the account and conversation. Local group labels are application metadata and do not modify Telegram. Switching either must not submit the previous conversation's text.
 
@@ -129,3 +129,35 @@ On a wide window, the list and conversation appear side by side. On a narrow win
 Activity is a searchable timeline of the latest 100 operations in this app session, with timestamps, account context and statuses. It clears when the app exits and is separate from saved Delivery History. Processing counts appear only when actually returned; an uncertain/blocked delivery is not shown as a successful send.
 
 History search/status/sort work on the latest 100 loaded ledger records; Refresh reloads those records. Select a row for message ID/error details. Unknown or pending outcomes are never automatically retried. Destinations shows only explicitly approved groups; Browse Groups is available inside its empty state. The account menu opens account management for confirmed disconnect/logout actions.
+
+
+## V3 messaging workspace
+
+The app opens in Chats. Use Contacts for cached contacts, Groups for group conversations, Channels for identity listings, Saved Messages for your own conversation and Advanced Workspace for administrative tools. Group Management remains available inside Advanced Workspace. Channels and bots currently show an explanation instead of content: sponsored-content integration is unfinished. This preview does not replace every official Telegram capability.
+
+Selecting a supported conversation loads recent messages, not its entire history. Older pages are explicit. Supported new messages, edits, deletions and read/typing events update the selected account while connected. A synchronization warning means the bounded view may be incomplete: choose the offered refresh/snapshot action. It does not replay sends. The app acknowledges incoming messages actually visible in the focused conversation and sends typing only for actual focused editor changes; it does not offer a deceptive hidden-read mode.
+
+For ordinary personal messages, compose inline, preview, check the account and exact recipient, and confirm. For managed group delivery, open Advanced Workspace → Composer and use an explicitly approved destination with fresh permission verification. Switching accounts flushes the old draft and invalidates confirmations. Drafts are local, not synchronized Telegram drafts.
+
+### Reply, edit and delete
+
+Use the message context menu. Reply preserves the selected message ID in the outgoing preview. Edit is limited to your own supported plain-text personal messages; formatted, forwarded, media, group and channel edits are unavailable. Delete means **Delete for Me**, never silently for everyone. Review the original target and exact typed confirmation. Action History records acknowledgement, rejection or uncertainty separately from Delivery History. Acknowledgement is not evidence that another person read a message. Do not repeat uncertain actions automatically.
+
+### Contacts, profile panels and folders
+
+Contacts initially loads cached rows; Refresh Contacts explicitly asks Telegram for the contact list. The app does not access the macOS address book. The projection is capped at 1,000 contacts and reports truncation; Telegram's underlying RPC is not paginated. Profile opens authorized metadata, username/about and available counts. Phone numbers, full participant lists and profile-photo downloads are not part of this panel.
+
+The Telegram Folders action displays cached/read-only server definitions, with an explicit refresh. It does not yet filter complete folder membership or change Telegram folders. Conversation-type filters and local group labels remain application views, not synchronized folders.
+
+### Preview or save an attachment
+
+Preview Image explicitly downloads a selected supported JPEG/PNG up to 8 MiB into the active profile's private cache. One native viewer uses a bounded thumbnail; large-pixel, multiframe, malformed or mismatched images are rejected. Close the viewer to release its token. Save As is a separate explicit action for supported known-size attachments up to 64 MiB and never overwrites a file. No attachment is executed automatically.
+
+Preview storage is bounded to four images. Cleanup runs on release, invalidation, account/runtime changes and subsequent cache access; backend expiration is lazy, so it is not a guarantee of secure erasure at a wall-clock instant after a crash. A validated ownership index permits removal of the app's known leftovers; unknown files are preserved and reported. Treat the profile directory and backups as private. Protected or disappearing content is unavailable, not exported through this workflow.
+
+
+## UI repair and history recovery
+
+Application navigation now stays in a persistent sidebar. The top window toolbar has section context and connection details; searches are inside their pages. Group inspection opens a scrollable sheet. Supported conversations show a loader, actual history, an honest empty state or an inline error/retry action. A draft-storage failure no longer suppresses the history request. Unknown legacy content metadata still needs an explicit conversation refresh, and channel/bot content remains gated.
+
+If a local draft write fails, transient account/conversation-scoped recovery keeps the unsaved text while the app remains open, up to 100 entries. This is not durable crash recovery: save successfully before quitting. A successful save retires the transient entry; changing accounts cannot expose another account’s recovery. Contacts has an explicit Refresh Contacts action and a Load Telegram Contacts empty-state action when connected. See [FULL_UI_AUDIT.md](FULL_UI_AUDIT.md) for remaining graphical checks.

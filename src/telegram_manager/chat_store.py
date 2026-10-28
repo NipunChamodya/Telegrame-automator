@@ -2,6 +2,7 @@
 import json
 from .models import now
 from .storage import Store
+from .content_policy import project_dialog
 
 
 class ChatStore:
@@ -35,14 +36,16 @@ class ChatStore:
                               (account, destination)).fetchone()
         return json.loads(row[0]) if row else None
 
-    def page(self, account: int, query: str = '', kind: str = 'all', page: int = 0, size: int = 50) -> dict:
+    def page(self, account: int, query: str = '', kind: str = 'all', page: int = 0, size: int = 50, sort: str = 'name') -> dict:
         # Unicode casefold in Python SQLite's registered function; all inputs stay parameters.
-        where = 'account=? AND (?=\'all\' OR kind=?) AND instr(unicode_fold(name || data),?)>0'
-        args = (account, kind, kind, query.casefold())
+        where = "account=? AND (?='all' OR kind=? OR (?='groups' AND kind IN ('group','supergroup'))) AND instr(unicode_fold(name || ' ' || COALESCE(json_extract(data,'$.username'),'') || ' ' || destination),?)>0"
+        args = (account, kind, kind, kind, query.casefold())
         total = self.db.execute('SELECT count(*) FROM dialog_cache WHERE ' + where, args).fetchone()[0]
+        ordering = ("COALESCE(json_extract(data,'$.pinned'),0) DESC, COALESCE(json_extract(data,'$.last_date'),'') DESC, destination"
+                    if sort == 'recent' else 'unicode_fold(name),destination')
         rows = self.db.execute('SELECT data FROM dialog_cache WHERE ' + where +
-                               ' ORDER BY unicode_fold(name),destination LIMIT ? OFFSET ?', (*args, size, page*size))
-        return {'chats': [json.loads(row[0]) for row in rows], 'total': total, 'page': page, 'size': size}
+                               ' ORDER BY ' + ordering + ' LIMIT ? OFFSET ?', (*args, size, page*size))
+        return {'chats': [project_dialog(json.loads(row[0])) for row in rows], 'total': total, 'page': page, 'size': size}
 
     def draft(self, account: int, destination: int) -> dict:
         row = self.db.execute('SELECT message,updated_at FROM conversation_drafts WHERE account=? AND destination=?',

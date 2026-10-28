@@ -12,17 +12,17 @@ struct ActivityTimeline: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 PageHeader(title: "Activity", subtitle: "Recent operations in this app session. Message contents are never included.", symbol: "waveform.path.ecg")
-                HStack {
-                    TextField("Search activity or account", text: $search)
-                        .textFieldStyle(.roundedBorder).accessibilityIdentifier("activitySearch")
+                PageControls {
+                    SearchToolbar(text: $search, prompt: "Search activity or account")
+                        .frame(width: 240).accessibilityIdentifier("activitySearch")
                     Picker("Type", selection: $kind) {
                         Text("All types").tag(nil as ActivityKind?)
                         ForEach(ActivityKind.allCases) { Text($0.title).tag(Optional($0)) }
-                    }.frame(maxWidth: 220)
+                    }.frame(width: 180)
                     Picker("Status", selection: $status) {
                         Text("All statuses").tag(nil as ActivityStatus?)
                         ForEach(ActivityStatus.allCases) { Text($0.title).tag(Optional($0)) }
-                    }.frame(maxWidth: 180)
+                    }.frame(width: 160)
                 }
             }.padding(24)
             Divider()

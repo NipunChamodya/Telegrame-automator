@@ -122,14 +122,28 @@ struct ChatSummary: Identifiable, Equatable, Sendable {
     var id: Int { data["id"].int }
     var title: String { safeDisplay(data["name"].string) }
     var kind: String { data["kind"].string }
-    var lastMessage: String { safeDisplay(data["last_message"].string) }
-    var allowsPersonalSend: Bool { kind == "private" || kind == "saved" }
+    var lastMessage: String { contentAvailable ? safeDisplay(data["last_message"].string) : "" }
+    var allowsPersonalSend: Bool { contentAvailable && (kind == "private" || kind == "saved") }
 }
 struct ChatMessage: Identifiable, Equatable, Sendable {
     let data: JSONValue
     var id: Int { data["id"].int }
-    var text: String { data["text"].string }
+    var text: String { contentAvailable ? data["text"].string : "" }
     var sender: String { safeDisplay(data["sender_name"].string) }
     var outgoing: Bool { data["outgoing"].bool }
     var hasAttachment: Bool { data["media"] != .null && !data["media"].object.isEmpty }
+}
+
+extension ChatSummary {
+    var contentAvailable: Bool { data["content_available"].bool && kind != "channel" }
+    var contentReason: String {
+        let reason = safeDisplay(data["content_reason"].string)
+        return reason.isEmpty ? "Refresh conversations to verify whether this content is supported." : reason
+    }
+}
+extension ChatMessage {
+    var contentAvailable: Bool { data["content_available"].bool }
+    var edited: Bool { data["edit_date"] != .null && data["edit_date"].doubleValue > 0 }
+    var replyID: Int? { data["reply_to_id"].int > 0 ? data["reply_to_id"].int : nil }
+    var reactions: [MessageReaction] { data["reactions"].array.map(MessageReaction.init).filter { $0.count > 0 } }
 }

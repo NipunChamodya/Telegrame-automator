@@ -20,10 +20,16 @@ final class ScreenshotTests: XCTestCase {
     func testNativeScreenshotsWithSyntheticData() throws {
         continueAfterFailure = false
         let app = launch()
-        for screen in ["Dashboard", "Chats", "Groups", "Permissions", "Composer", "Drafts", "Destinations", "History", "Activity", "Accounts", "Settings"] {
+        for screen in ["Chats", "Contacts", "Groups", "Channels", "Saved Messages", "Advanced Workspace", "Accounts", "Settings"] {
             let item = app.outlines.staticTexts[screen].firstMatch
             XCTAssertTrue(item.waitForExistence(timeout: 5), "Sidebar item: \(screen)")
             item.click(); capture(screen.lowercased(), app: app)
+        }
+        for tool in ["Dashboard", "Group Management", "Permissions", "Composer", "Drafts", "Destinations", "History", "Activity", "Message Actions"] {
+            app.outlines.staticTexts["Advanced Workspace"].firstMatch.click()
+            let item = app.descendants(matching: .any)["advanced_" + tool].firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 5)); item.click()
+            capture(tool.lowercased(), app: app)
         }
         app.terminate()
     }
@@ -37,7 +43,7 @@ final class ScreenshotTests: XCTestCase {
     }
     func testInspectorEmptyErrorAndSwitcherStates() {
         continueAfterFailure = false
-        var app = launch(["TGM_UI_SCREEN": "Groups", "TGM_UI_INSPECTOR": "1"])
+        var app = launch(["TGM_UI_SCREEN": "Group Management", "TGM_UI_INSPECTOR": "1"])
         capture("group-inspector", app: app); app.terminate()
         app = launch(["TGM_UI_SCREEN": "Chats", "TGM_UI_EMPTY": "1"])
         capture("empty-conversations", app: app); app.terminate()
@@ -150,7 +156,7 @@ final class ScreenshotTests: XCTestCase {
             ("History", "history-empty", ["TGM_UI_HISTORY_EMPTY":"1"]),
             ("Destinations", "destinations-populated", [:]),
             ("Destinations", "destinations-empty", ["TGM_UI_DESTINATIONS_EMPTY":"1"]),
-            ("Groups", "groups", [:]), ("Permissions", "permissions", [:]),
+            ("Group Management", "groups", [:]), ("Permissions", "permissions", [:]),
             ("Composer", "composer", [:]), ("Drafts", "drafts", [:]),
             ("Accounts", "accounts", [:]), ("Settings", "settings", [:])
         ]
@@ -161,4 +167,110 @@ final class ScreenshotTests: XCTestCase {
         }
     }
 
+}
+
+extension ScreenshotTests {
+    func testContactsProfileFoldersAndImageViewerScreenshots() {
+        continueAfterFailure = false
+        let cases: [(String, [String: String])] = [
+            ("contacts-populated", ["TGM_UI_SCREEN": "Contacts"]),
+            ("contacts-empty", ["TGM_UI_SCREEN": "Contacts", "TGM_UI_EMPTY": "1"]),
+            ("peer-profile", ["TGM_UI_PROFILE": "1"]),
+            ("telegram-folders", ["TGM_UI_FOLDERS": "1"]),
+            ("telegram-folders-empty", ["TGM_UI_FOLDERS": "1", "TGM_UI_EMPTY": "1"]),
+            ("synthetic-image-viewer", ["TGM_UI_IMAGE": "1"])
+        ]
+        for (name, flags) in cases { let app = launch(flags); capture(name, app: app); app.terminate() }
+    }
+}
+
+extension ScreenshotTests {
+    private func assertShell(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let sidebar = app.descendants(matching: .any)["applicationSidebar"].firstMatch
+        let identity = app.descendants(matching: .any)["workspaceIdentity"].firstMatch
+        let content = app.descendants(matching: .any)["workspaceContent"].firstMatch
+        XCTAssertTrue(sidebar.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(identity.exists, file: file, line: line)
+        XCTAssertTrue(content.exists, file: file, line: line)
+        XCTAssertGreaterThan(sidebar.frame.height, app.windows.firstMatch.frame.height * 0.5, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(sidebar.frame.width, 210, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(content.frame.minX, sidebar.frame.maxX - 2, file: file, line: line)
+        let close = app.windows.firstMatch.buttons["_XCUI:CloseWindow"]
+        XCTAssertTrue(close.exists, "Native close control is required to verify titlebar clearance", file: file, line: line)
+        if close.exists {
+            XCTAssertGreaterThanOrEqual(identity.frame.minY, close.frame.maxY - 2, "Sidebar identity must clear traffic lights", file: file, line: line)
+            let header = app.descendants(matching: .any)["pageHeader"].firstMatch
+            if header.exists { XCTAssertGreaterThanOrEqual(header.frame.minY, close.frame.maxY - 2, file: file, line: line) }
+        }
+    }
+    func testSharedShellSurvivesEveryNavigationCycle() {
+        continueAfterFailure = false
+        let app = launch()
+        for _ in 0..<2 {
+            for page in ["Chats", "Contacts", "Groups", "Channels", "Saved Messages", "Accounts", "Settings", "Advanced Workspace"] {
+                app.outlines.staticTexts[page].firstMatch.click()
+                assertShell(app)
+            }
+            for tool in ["Dashboard", "Group Management", "Permissions", "Composer", "Drafts", "Destinations", "History", "Activity", "Message Actions"] {
+                app.outlines.staticTexts["Advanced Workspace"].firstMatch.click()
+                app.descendants(matching: .any)["advanced_" + tool].firstMatch.click()
+                assertShell(app)
+                capture("shell-" + tool, app: app)
+            }
+        }
+        app.terminate()
+    }
+    func testResizePreservesSidebarAndConversationGeometry() {
+        continueAfterFailure = false
+        let app = launch(["TGM_UI_SIZE": "large", "TGM_UI_NO_SELECTION": "1"])
+        assertShell(app)
+        let window = app.windows.firstMatch
+        let corner = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1)).withOffset(CGVector(dx: -2, dy: -2))
+        corner.press(forDuration: 0.2, thenDragTo: window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 982, dy: 642)))
+        assertShell(app)
+        XCTAssertGreaterThan(app.descendants(matching: .any)["conversationList"].firstMatch.frame.height, window.frame.height * 0.4)
+        capture("resized-compact-shell", app: app)
+        app.terminate()
+    }
+    func testMinimizeAndRestoreRetainsShell() {
+        continueAfterFailure = false
+        let app = launch()
+        let window = app.windows.firstMatch
+        let minimize = window.buttons["_XCUI:MinimizeWindow"]
+        XCTAssertTrue(minimize.exists); minimize.click()
+        app.menuBars.menuBarItems["Window"].click()
+        let restore = app.menuItems["Unofficial Telegram Manager"].firstMatch
+        XCTAssertTrue(restore.waitForExistence(timeout: 5)); restore.click()
+        XCTAssertTrue(window.waitForExistence(timeout: 5)); assertShell(app)
+        capture("restored-shell", app: app); app.terminate()
+    }
+    func testFixtureAccountSwitchPreservesDraftAndClearsOtherAccountContent() {
+        continueAfterFailure = false
+        let app = launch()
+        let editor = app.textViews["chatComposer"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5)); editor.click()
+        editor.typeKey("a", modifierFlags: .command); editor.typeText("Fixture draft belongs to account one")
+        app.menuButtons["accountSwitcher"].click()
+        app.menuItems["Second Example Account"].click()
+        XCTAssertTrue(app.staticTexts["Second Example Account"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.textViews["chatComposer"].exists)
+        assertShell(app)
+        app.menuButtons["accountSwitcher"].click(); app.menuItems["Example Account"].click()
+        XCTAssertTrue(app.textViews["chatComposer"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textViews["chatComposer"].value as? String, "Fixture draft belongs to account one")
+        capture("restored-account-draft", app: app); app.terminate()
+    }
+    func testContactsRefreshAndConversationErrorStates() {
+        continueAfterFailure = false
+        var app = launch(["TGM_UI_SCREEN": "Contacts", "TGM_UI_CONNECTED": "1", "TGM_UI_CONTACTS_EMPTY": "1"])
+        let refresh = app.buttons["refreshContacts"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 5)); XCTAssertTrue(refresh.isEnabled); refresh.click()
+        XCTAssertTrue(app.staticTexts["தமிழ் Example Contact"].waitForExistence(timeout: 5))
+        capture("refreshed-fixture-contacts", app: app); app.terminate()
+        for state in ["TGM_UI_MESSAGES_ERROR", "TGM_UI_MESSAGES_LOADING"] {
+            app = launch(["TGM_UI_CONNECTED": "1", state: "1"])
+            XCTAssertTrue(app.descendants(matching: .any)[state == "TGM_UI_MESSAGES_ERROR" ? "messagesError" : "messagesLoading"].firstMatch.waitForExistence(timeout: 5))
+            assertShell(app); capture(state.lowercased(), app: app); app.terminate()
+        }
+    }
 }

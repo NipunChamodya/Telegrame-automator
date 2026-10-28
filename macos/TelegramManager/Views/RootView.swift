@@ -26,30 +26,69 @@ struct Surface<Content: View>: View {
 
 struct RootView: View {
     @ObservedObject var model: AppModel
+    @State private var didRestoreNavigation = false
+    @SceneStorage("workspace.navigation") private var restoredScreen = Screen.chats.rawValue
     var body: some View {
-        NavigationSplitView {
-            VStack(spacing: 0) {
+        HSplitView {
+            sidebar
+            workspaceContent
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle("Unofficial Telegram Manager")
+        .toolbar { workspaceToolbar }
+        .onAppear {
+            guard !didRestoreNavigation else { return }
+            didRestoreNavigation = true
+            // Restoration is local-only. Never restore a send preview or trigger a remote action.
+            if !model.isUIFixture, let destination = Screen(rawValue: restoredScreen) {
+                model.restoreNavigation(to: destination)
+            }
+        }
+        .onChange(of: model.screen) { _, destination in if !model.isUIFixture { restoredScreen = destination.rawValue } }
+        .alert("Operation needs attention", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.dismissError() } })) {
+            Button("OK") { model.dismissError() }
+        } message: { Text(model.errorMessage ?? "") }
+        .sheet(item: $model.profileTarget) { profile in PeerProfileView(model: model, profile: profile) }
+        .sheet(isPresented: $model.foldersPresented) { TelegramFoldersView(model: model) }
+        .sheet(item: $model.mediaPreview, onDismiss: { model.closeMediaPreview() }) { preview in ImagePreviewView(model: model, context: preview) }
+        .sheet(isPresented: Binding(get: { ["credentials", "phone", "code", "password", "bind_account"].contains(model.authStage) }, set: { if !$0 { model.cancelAuthentication() } })) {
+            AuthenticationView(model: model)
+        }
+        .sheet(isPresented: $model.diagnosticsPresented) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Connection Diagnostics").font(.title2.weight(.semibold))
+                ScrollView { Text(model.diagnosticsSummary).font(.system(.callout, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(4) }
+                HStack { Spacer(); Button("Close") { model.diagnosticsPresented = false }.keyboardShortcut(.cancelAction) }
+            }.padding(24).frame(minWidth: 520, idealWidth: 620, minHeight: 340)
+                .accessibilityIdentifier("connectionDiagnosticsSheet")
+        }
+        .tint(.blue)
+    }
+    private var sidebar: some View {
+        VStack(spacing: 0) {
                 HStack(spacing: 10) {
-                    Image(systemName: "paperplane.circle.fill").font(.system(size: 32)).foregroundStyle(.blue)
-                    VStack(alignment: .leading) { Text("Telegram Manager").font(.headline); Text("Personal workspace").font(.caption).foregroundStyle(.secondary) }
+                    Image(systemName: "checkmark.bubble.fill").font(.system(size: 32)).foregroundStyle(.blue)
+                    VStack(alignment: .leading) { Text("Unofficial Telegram Manager").font(.headline); Text("Personal workspace").font(.caption).foregroundStyle(.secondary) }
                     Spacer()
-                }.padding(.horizontal, 16).padding(.vertical, 22)
-                accountMenu
-                List(selection: $model.screen) {
-                    sidebarSection("Overview", screens: [.dashboard])
-                    sidebarSection("Messaging", screens: [.chats, .composer, .drafts])
-                    sidebarSection("Groups", screens: [.groups, .permissions, .destinations])
-                    sidebarSection("Records", screens: [.history, .activity])
+                }.padding(16).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("workspaceIdentity")
+                accountMenu.fixedSize(horizontal: false, vertical: true)
+                List(selection: Binding<Screen>(get: { Screen.advanced.contains(model.screen) ? .advancedWorkspace : model.screen }, set: { model.navigate(to: $0) })) {
+                    sidebarSection("Messaging", screens: Screen.messaging)
+                    sidebarSection("Workspace", screens: [.advancedWorkspace])
+                    if Screen.advanced.contains(model.screen) {
+                        Section("Current tool") { Label(model.screen.rawValue, systemImage: model.screen.symbol).foregroundStyle(.secondary) }
+                    }
                     sidebarSection("App", screens: [.accounts, .settings])
-                }.listStyle(.sidebar).accessibilityIdentifier("workspaceSidebar")
+                }.listStyle(.sidebar).accessibilityIdentifier("workspaceSidebar").frame(maxHeight: .infinity)
                 VStack(alignment: .leading, spacing: 6) {
                     Label(model.connected ? "Account connected" : model.backendOnline ? "Account not connected" : "Backend unavailable", systemImage: model.connected ? "checkmark.circle.fill" : "circle.dotted")
                         .font(.caption).foregroundStyle(model.connected ? .green : .secondary)
                     Text(model.activeProfile?.title ?? "Explicit account selection.").font(.caption2).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
-            }.navigationSplitViewColumnWidth(min: 210, ideal: 235, max: 280)
-        } detail: {
-            VStack(spacing: 0) {
+            }.frame(minWidth: 220, idealWidth: 245, maxWidth: 280, maxHeight: .infinity, alignment: .top).accessibilityIdentifier("applicationSidebar")
+    }
+    private var workspaceContent: some View {
+        VStack(spacing: 0) {
                 if model.busy {
                     HStack(spacing: 12) {
                         ProgressView().controlSize(.small)
@@ -64,7 +103,10 @@ struct RootView: View {
                 Group {
                     switch model.screen {
                     case .dashboard: DashboardView(model: model)
-                    case .chats: ChatsView(model: model)
+                    case .chats, .groupChats, .channels: ChatsView(model: model)
+                    case .savedMessages: ChatsView(model: model, detailOnly: true)
+                    case .advancedWorkspace: AdvancedWorkspaceView(model: model)
+                    case .contacts: ContactsView(model: model)
                     case .accounts: AccountsView(model: model)
                     case .drafts: DraftsView(model: model)
                     case .activity: ActivityTimeline(events: model.activity)
@@ -73,41 +115,37 @@ struct RootView: View {
                     case .composer: ComposerView(model: model)
                     case .destinations: DestinationsView(model: model)
                     case .history: HistoryView(model: model)
+                    case .messageOperations: MessageOperationsView(model: model)
                     case .settings: SettingsView(model: model)
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .navigationTitle(model.screen.rawValue)
-            .toolbar {
-                ToolbarItem {
-                    if #available(macOS 26.0, *) {
-                        Label(model.backendOnline ? "Backend ready" : "Backend offline", systemImage: model.backendOnline ? "circle.fill" : "circle.dotted")
-                            .font(.caption).foregroundStyle(model.backendOnline ? .green : .secondary)
-                            .padding(.horizontal, 10).padding(.vertical, 6).glassEffect()
+            .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .accessibilityIdentifier("workspaceContent")
+    }
+    @ToolbarContentBuilder private var workspaceToolbar: some ToolbarContent {
+
+            ToolbarItem(placement: .navigation) {
+                HStack(spacing: 8) {
+                    if Screen.advanced.contains(model.screen) {
+                        Button { model.navigate(to: .advancedWorkspace) } label: { Image(systemName: "chevron.left") }
+                            .help("Back to Advanced Workspace").accessibilityLabel("Back to Advanced Workspace")
                     }
+                    Label(model.screen.rawValue, systemImage: model.screen.symbol)
+                        .lineLimit(1).frame(maxWidth: 220, alignment: .leading)
+                        .accessibilityIdentifier("workspaceTitle")
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button { model.retryConnection() } label: { Label(model.connected ? "Restore Session" : "Connect", systemImage: "bolt.horizontal.circle") }
-                        .disabled(model.busy || model.isConnecting || !model.connectionActionAvailable).help("Restore the saved session or continue secure setup").accessibilityIdentifier("connectBackend")
-                }
-                ToolbarItem { Button { model.discover() } label: { Label("Discover", systemImage: "arrow.clockwise") }.disabled(!model.connected || model.busy).help("Refresh lightweight group metadata; never sends messages") }
             }
-        }
-        .alert("Operation needs attention", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.dismissError() } })) {
-            Button("OK") { model.dismissError() }
-        } message: { Text(model.errorMessage ?? "") }
-        .sheet(isPresented: Binding(get: { ["credentials", "phone", "code", "password", "bind_account"].contains(model.authStage) }, set: { if !$0 { model.cancelAuthentication() } })) {
-            AuthenticationView(model: model)
-        }
-        .sheet(isPresented: $model.diagnosticsPresented) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Connection Diagnostics").font(.title2.weight(.semibold))
-                ScrollView { Text(model.diagnosticsSummary).font(.system(.callout, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(4) }
-                HStack { Spacer(); Button("Close") { model.diagnosticsPresented = false }.keyboardShortcut(.cancelAction) }
-            }.padding(24).frame(minWidth: 520, idealWidth: 620, minHeight: 340)
-                .accessibilityIdentifier("connectionDiagnosticsSheet")
-        }
-        .tint(.blue)
+            ToolbarItem(placement: .primaryAction) {
+                Button { if model.connected { model.openDiagnostics() } else { model.retryConnection() } } label: {
+                    Label(model.connected ? "Connection Details" : "Connect", systemImage: model.connected ? "info.circle" : "bolt.horizontal.circle")
+                }
+                .disabled(model.busy || model.isConnecting || (!model.connected && !model.connectionActionAvailable))
+                .help(model.connected ? "View sanitized connection diagnostics" : "Restore the saved session or continue secure setup")
+                .accessibilityIdentifier("connectBackend")
+            }
+
     }
     @ViewBuilder private func sidebarSection(_ title: String, screens: [Screen]) -> some View {
         Section(title) {
@@ -153,7 +191,7 @@ struct DashboardView: View {
                         Text("Your Telegram workspace").font(.largeTitle.weight(.bold))
                         Text("Discover groups, understand permissions, and post with care.").foregroundStyle(.secondary)
                     }; Spacer()
-                    Image(systemName: "paperplane").font(.system(size: 44, weight: .light)).foregroundStyle(.blue.opacity(0.7)).padding()
+                    Image(systemName: "checkmark.bubble").font(.system(size: 44, weight: .light)).foregroundStyle(.blue.opacity(0.7)).padding()
                 }
                 if !model.connected { RecoveryPanel(model: model) }
                 HStack(spacing: 14) {
@@ -266,5 +304,43 @@ struct RecoveryPanel: View {
         Button("Connection Diagnostics") { model.openDiagnostics() }.disabled(model.busy)
             .help("Open sanitized backend and connection diagnostics")
             .accessibilityIdentifier("openConnectionDiagnostics")
+    }
+}
+
+struct AdvancedWorkspaceView: View {
+    @ObservedObject var model: AppModel
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                PageHeader(title: "Advanced Workspace", subtitle: "Group management, explicit destination approvals, and delivery records remain available here.", symbol: "square.stack.3d.up")
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 16)], spacing: 16) {
+                    ForEach(Screen.advanced) { screen in
+                        Button { model.navigate(to: screen) } label: {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Image(systemName: screen.symbol).font(.title2).foregroundStyle(.tint)
+                                Text(screen.rawValue).font(.headline)
+                                Text(description(screen)).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+                            }.frame(maxWidth: .infinity, minHeight: 115, alignment: .topLeading).padding(18)
+                                .background(.background, in: RoundedRectangle(cornerRadius: 12)).overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+                        }.buttonStyle(.plain).accessibilityIdentifier("advanced_\(screen.id)")
+                    }
+                }
+                Label("Technical posting permission does not authorize advertising or unsolicited messages.", systemImage: "checkmark.shield").font(.callout).foregroundStyle(.secondary)
+            }.padding(24)
+        }.accessibilityIdentifier("advancedWorkspace")
+    }
+    private func description(_ screen: Screen) -> String {
+        switch screen {
+        case .dashboard: return "Account, group, and system status."
+        case .groups: return "Discover groups and inspect cached metadata."
+        case .permissions: return "Inspect selected destinations with controlled limits."
+        case .composer: return "Compose, preview, and confirm one approved group delivery."
+        case .drafts: return "Continue saved account-specific drafts."
+        case .destinations: return "Explicitly approve or revoke messaging destinations."
+        case .history: return "Review persistent delivery outcomes without automatic retries."
+        case .messageOperations: return "Review acknowledged, rejected, and uncertain own-message edits or deletions."
+        case .activity: return "Review this session’s connection and operation timeline."
+        default: return ""
+        }
     }
 }
