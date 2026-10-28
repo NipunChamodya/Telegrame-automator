@@ -3,16 +3,37 @@ import SwiftUI
 struct ComposerView: View {
     @ObservedObject var model: AppModel
     var body: some View {
-        HSplitView {
+        GeometryReader { geometry in
+            if geometry.size.width >= 850 {
+                HSplitView {
+                    composingPane.frame(minWidth: 430)
+                    reviewPane.frame(minWidth: 320, idealWidth: 380)
+                }
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        composingPane
+                        Divider()
+                        reviewPane
+                    }
+                }
+            }
+        }
+        .onChange(of: model.draft) { _, _ in model.invalidatePreview(); model.scheduleDraftSave() }
+        .onChange(of: model.destination) { _, _ in model.invalidatePreview() }
+        .task { await model.loadApprovals() }
+    }
+    private var composingPane: some View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack { VStack(alignment: .leading, spacing: 6) { Text("Compose with intention").font(.title.weight(.semibold)); Text("One message. One explicitly approved destination.").foregroundStyle(.secondary) }; Spacer() }
                 TextEditor(text: $model.draft).font(.body).padding(8).scrollContentBackground(.hidden)
                     .background(.background, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+                    .frame(minHeight: 200)
                     .accessibilityLabel("Message text").accessibilityIdentifier("messageEditor")
                 HStack {
                     Text("\(ComposerValidation.units(model.draft)) / 4096 UTF-16 units").monospacedDigit().font(.caption).foregroundStyle(model.validation != nil && !model.draft.isEmpty ? .red : .secondary)
-                    Spacer(); Button("Import UTF-8 File…") { model.importMessage() }; Button("Save Draft") { model.saveDraft() }.disabled(model.busy)
+                    Spacer(); Button("Import UTF-8 File…") { model.importMessage() }.disabled(model.busy).help("Import a regular UTF-8 text file without sending"); Button("Save Draft") { model.saveDraft() }.disabled(model.busy)
                 }
                 if let validation = model.validation, !model.draft.isEmpty { Label(validation, systemImage: "exclamationmark.circle").foregroundStyle(.red).font(.callout) }
                 Text(model.draftDirty ? "Unsaved changes" : model.draftSaved.isEmpty ? "" : "Draft saved \(readableTime(model.draftSaved))").font(.caption).foregroundStyle(.secondary)
@@ -28,7 +49,9 @@ struct ComposerView: View {
                     Button { model.preparePreview() } label: { Label("Preview & Verify Permissions", systemImage: "checkmark.shield") }
                         .buttonStyle(.borderedProminent).disabled(!model.canPreview).accessibilityIdentifier("previewMessage")
                 }
-            }.padding(26).frame(minWidth: 440)
+            }.padding(20)
+    }
+    private var reviewPane: some View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Delivery review").font(.title2.weight(.semibold))
                 if let preview = model.preview {
@@ -38,7 +61,7 @@ struct ComposerView: View {
                         PermissionBadge(state: preview["group"]["permission"].string)
                     }
                     Text("Complete message").font(.headline)
-                    ScrollView { Text(preview["message"].string).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).padding(14) }.background(.background, in: RoundedRectangle(cornerRadius: 12))
+                    ScrollView { Text(preview["message"].string).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled).padding(14) }.frame(minHeight: 120, maxHeight: 320).background(.background, in: RoundedRectangle(cornerRadius: 12))
                     Text("To send this exact message once, type:").font(.callout)
                     Text(preview["confirmation"].string).font(.system(.callout, design: .monospaced).weight(.semibold)).textSelection(.enabled)
                     TextField("Exact confirmation", text: $model.confirmation).textFieldStyle(.roundedBorder).accessibilityIdentifier("sendConfirmation")
@@ -49,11 +72,7 @@ struct ComposerView: View {
                     ContentUnavailableView("No approved preview", systemImage: "doc.text.magnifyingglass", description: Text("Compose a message, select one approved destination, then verify permissions. Changing either clears the preview."))
                 }
                 Spacer(minLength: 0)
-            }.padding(26).frame(minWidth: 320, idealWidth: 380)
-        }
-        .onChange(of: model.draft) { _, _ in model.invalidatePreview() }
-        .onChange(of: model.destination) { _, _ in model.invalidatePreview() }
-        .task { await model.loadApprovals() }
+            }.padding(20)
     }
 }
 

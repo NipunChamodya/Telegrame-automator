@@ -13,3 +13,9 @@ macos/.swiftpm/
 *.xcuserstate
 xcuserdata/
 .DerivedData/
+# Additional private per-account artifacts
+*.sqlite
+*.db
+.env.*
+account-profiles.json
+desktop-settings.json

@@ -34,12 +34,18 @@ struct RootView: View {
                     VStack(alignment: .leading) { Text("Telegram Manager").font(.headline); Text("Personal workspace").font(.caption).foregroundStyle(.secondary) }
                     Spacer()
                 }.padding(.horizontal, 16).padding(.vertical, 22)
+                Menu {
+                    ForEach(model.profiles.filter { !$0.archived }) { profile in
+                        Button(profile.title + (profile.active ? " ✓" : "")) { if !profile.active { model.switchProfile(profile) } }.disabled(model.busy)
+                    }
+                    Divider(); Button("Manage Accounts…") { model.screen = .accounts }
+                } label: { Label(model.activeProfile?.title ?? "Choose Account", systemImage: "person.crop.circle") }.padding(.horizontal, 16).padding(.bottom, 12).accessibilityIdentifier("accountSwitcher")
                 List(Screen.allCases, selection: $model.screen) { screen in Label(screen.rawValue, systemImage: screen.symbol).tag(screen).padding(.vertical, 4) }
-                    .listStyle(.sidebar)
+                    .listStyle(.sidebar).accessibilityIdentifier("workspaceSidebar")
                 VStack(alignment: .leading, spacing: 6) {
                     Label(model.connected ? "Account connected" : model.backendOnline ? "Account not connected" : "Backend unavailable", systemImage: model.connected ? "checkmark.circle.fill" : "circle.dotted")
                         .font(.caption).foregroundStyle(model.connected ? .green : .secondary)
-                    Text("One account. Explicit approval.").font(.caption2).foregroundStyle(.secondary)
+                    Text(model.activeProfile?.title ?? "Explicit account selection.").font(.caption2).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
             }.navigationSplitViewColumnWidth(min: 210, ideal: 235, max: 280)
         } detail: {
@@ -52,9 +58,16 @@ struct RootView: View {
                     }.padding(12).background(.blue.opacity(0.06))
                     Divider()
                 }
+                if !model.connected && !model.busy && model.screen != .dashboard {
+                    RecoveryPanel(model: model, compact: true).padding(12)
+                }
                 Group {
                     switch model.screen {
                     case .dashboard: DashboardView(model: model)
+                    case .chats: ChatsView(model: model)
+                    case .accounts: AccountsView(model: model)
+                    case .drafts: DraftsView(model: model)
+                    case .activity: ActivityView(model: model)
                     case .groups: GroupsView(model: model, inspectionMode: false)
                     case .permissions: GroupsView(model: model, inspectionMode: true)
                     case .composer: ComposerView(model: model)
@@ -74,10 +87,10 @@ struct RootView: View {
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button { model.reconnect() } label: { Label(model.connected ? "Restore Session" : "Connect", systemImage: "bolt.horizontal.circle") }
-                        .disabled(model.busy).accessibilityIdentifier("connectBackend")
+                    Button { model.retryConnection() } label: { Label(model.connected ? "Restore Session" : "Connect", systemImage: "bolt.horizontal.circle") }
+                        .disabled(model.busy || model.isConnecting || !model.connectionActionAvailable).help("Restore the saved session or continue secure setup").accessibilityIdentifier("connectBackend")
                 }
-                ToolbarItem { Button { model.discover() } label: { Label("Discover", systemImage: "arrow.clockwise") }.disabled(!model.connected || model.busy) }
+                ToolbarItem { Button { model.discover() } label: { Label("Discover", systemImage: "arrow.clockwise") }.disabled(!model.connected || model.busy).help("Refresh lightweight group metadata; never sends messages") }
             }
         }
         .alert("Operation needs attention", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.dismissError() } })) {
@@ -85,6 +98,14 @@ struct RootView: View {
         } message: { Text(model.errorMessage ?? "") }
         .sheet(isPresented: Binding(get: { ["credentials", "phone", "code", "password", "bind_account"].contains(model.authStage) }, set: { if !$0 { model.cancelAuthentication() } })) {
             AuthenticationView(model: model)
+        }
+        .sheet(isPresented: $model.diagnosticsPresented) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Connection Diagnostics").font(.title2.weight(.semibold))
+                ScrollView { Text(model.diagnosticsSummary).font(.system(.callout, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(4) }
+                HStack { Spacer(); Button("Close") { model.diagnosticsPresented = false }.keyboardShortcut(.cancelAction) }
+            }.padding(24).frame(minWidth: 520, idealWidth: 620, minHeight: 340)
+                .accessibilityIdentifier("connectionDiagnosticsSheet")
         }
         .tint(.blue)
     }
@@ -102,6 +123,7 @@ struct DashboardView: View {
                     }; Spacer()
                     Image(systemName: "paperplane").font(.system(size: 44, weight: .light)).foregroundStyle(.blue.opacity(0.7)).padding()
                 }
+                if !model.connected { RecoveryPanel(model: model) }
                 HStack(spacing: 14) {
                     metric("Cached groups", key: "total", icon: "person.3", color: .blue)
                     metric("Allowed", key: "allowed", icon: "checkmark.circle", color: .green)
@@ -114,7 +136,7 @@ struct DashboardView: View {
                         Text(model.accountName.isEmpty ? "Personal Telegram account" : model.accountName)
                         LabeledContent("Account ID", value: model.accountID == 0 ? "Not bound" : String(model.accountID))
                         LabeledContent("Session", value: model.status["session_present"].bool ? "Saved privately" : "Setup required")
-                        if !model.connected { Button("Connect Telegram") { model.reconnect() }.disabled(model.busy) }
+                        if !model.connected { Button("Connect Telegram") { model.retryConnection() }.disabled(model.busy) }
                     }
                     Surface(title: "System status") {
                         LabeledContent("Backend", value: model.backendOnline ? "Running" : "Offline")
@@ -173,5 +195,37 @@ struct CooldownView: View {
                 remaining = max(0, Int(ceil(deadline - Date().timeIntervalSince1970)))
             }
         }
+    }
+}
+
+
+struct RecoveryPanel: View {
+    @ObservedObject var model: AppModel
+    var compact = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 8 : 14) {
+            Label(model.connectionTitle, systemImage: model.connectionSymbol)
+                .font(compact ? .headline : .title3.weight(.semibold))
+                .accessibilityIdentifier("connectionRecoveryTitle")
+            Text(model.connectionExplanation).font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { actions }
+                VStack(alignment: .leading, spacing: 8) { actions }
+            }
+        }.padding(compact ? 12 : 18).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.blue.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+            .accessibilityElement(children: .contain).accessibilityIdentifier("connectionRecoveryPanel")
+    }
+    @ViewBuilder private var actions: some View {
+        Button("Retry Connection") { model.retryConnection() }
+            .disabled(model.busy || model.isConnecting || !model.connectionActionAvailable)
+            .help("Reconnect safely without deleting credentials or local history")
+            .accessibilityIdentifier("retryConnection")
+        Button("Manage Accounts") { model.screen = .accounts }.disabled(model.busy)
+            .accessibilityIdentifier("recoveryManageAccounts")
+        Button("Connection Diagnostics") { model.openDiagnostics() }.disabled(model.busy)
+            .help("Open sanitized backend and connection diagnostics")
+            .accessibilityIdentifier("openConnectionDiagnostics")
     }
 }

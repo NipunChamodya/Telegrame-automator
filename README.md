@@ -1,300 +1,252 @@
-# Telegram Group Messaging Manager
+<div align="center">
+  <img src="docs/assets/logo.svg" width="104" height="104" alt="Telegram Manager — an original conversation-workspace icon">
+  <h1>Telegram Manager</h1>
+  <p><strong>Your Telegram workspace. Native to macOS. Deliberate by design.</strong></p>
+  <p>Manage account profiles, browse conversations, inspect groups, and compose messages with explicit delivery controls.</p>
+  <p>
+    <img alt="Platform: macOS 14 or newer" src="https://img.shields.io/badge/macOS-14%2B-24292f?logo=apple&amp;logoColor=white">
+    <img alt="Architecture: Apple Silicon" src="https://img.shields.io/badge/Apple_Silicon-arm64-147EFB">
+    <img alt="Interface: SwiftUI" src="https://img.shields.io/badge/UI-SwiftUI-087EA4">
+    <img alt="Backend: Python 3.13 or newer" src="https://img.shields.io/badge/Python-3.13%2B-3776AB">
+    <img alt="Project status: development preview" src="https://img.shields.io/badge/status-development_preview-D97706">
+  </p>
+  <p><a href="#quick-start">Build &amp; launch</a> · <a href="docs/USER_GUIDE.md">User guide</a> · <a href="docs/ARCHITECTURE.md">Architecture</a> · <a href="docs/VALIDATION.md">Verification</a></p>
+</div>
 
-A native macOS SwiftUI application backed by the existing Python 3.13+ CLI/service. It restores a personal Telegram session, discovers joined groups, stores permission metadata in SQLite, and sends plain text to one explicitly selected destination after approval. It never automatically sends to joined groups.
+> **Development preview — v0.3.0.** This is a real SwiftUI/AppKit application with a Python backend, not a web wrapper. Local builds require the checkout's Python environment. Interactive launch and screenshot validation have encountered execution-environment blockers; compilation alone is not a verified desktop launch. There is no verified standalone installer or distributable release yet.
 
-## Native desktop app
+## A workspace with clear boundaries
 
-The project now includes a real SwiftUI/AppKit application in `macos/TelegramManager.xcodeproj`. It manages the Python backend itself using strict local JSON-line IPC. The existing Telegram session, Keychain credentials, SQLite records and account binding are reused; no separate CLI process should be running.
+Telegram Manager extends an existing permission-aware CLI into a native desktop app. The Python service remains responsible for Telegram authentication, SQLite persistence, account identity and delivery safety. The CLI remains available for maintenance.
 
-Build and launch the local development app:
+| Workspace | Implemented capabilities |
+| --- | --- |
+| Accounts | Separate session/database/settings/Keychain namespaces; explicit switching and connection controls |
+| Groups | Lightweight discovery, cached search/filter/sort, metadata freshness, bounded permission inspections |
+| Conversations | Explicit dialog refresh, paginated recent messages, Saved Messages and Unicode text |
+| Composition | Multiline editor, UTF-8 import, local drafts, previews and exact destination confirmation |
+| Delivery | Managed-group approval, fresh permission checks, account verification, persistent deduplication and history |
+| macOS | Native navigation and controls, semantic colors, light/dark/system appearance, selective Liquid Glass on macOS 26 |
+| Storage | Private local files, account binding, SQLite backup and sanitized diagnostics |
 
-```sh
+**Technical text-posting permission does not imply permission to advertise or send unsolicited messages.** Newly discovered groups are never automatically approved or messaged.
+
+## Backend connection and recovery
+
+The app now explicitly owns one managed Python process. Ordinary requests never spawn replacements; Retry Connection waits for the old owned child to exit before starting one replacement. A single workspace window and shared settings model prevent competing window-owned backends.
+
+If **Another instance is running** appears, use **View Diagnostics** and quit the known competing CLI/app before retrying. The exact owner of the reported real-world conflict could not be inspected in the managed environment. Never delete `manager.lock`, sessions or databases to suppress the error. See [backend lifecycle and safe recovery](docs/BACKEND_LIFECYCLE.md).
+
+## Screenshots and visual evidence
+
+No application screenshots or animated demonstrations are published here yet. Genuine graphical capture has not succeeded in the managed development environment; there are no generated mockups presented as screenshots.
+
+The [UI validation report](docs/UI_VALIDATION.md) records launch attempts, executable UI tests, screenshot commands and unverified screens. Capture only synthetic fixtures, never real credentials or private conversations. Accepted screenshots belong under `docs/assets/screenshots/`; short genuine recordings belong under `docs/assets/demos/`.
+
+## Multiple accounts
+
+The original installation stays in place. Additional profiles use separate private directories rather than reusing the original session or resetting its account binding. Telegram's verified numeric account ID identifies account data; names and phone numbers do not.
+
+- Add another profile through **Accounts**, then complete authentication in the app.
+- Switch accounts explicitly. Cached data loads without an automatic discovery scan.
+- Drafts, approved destinations, histories and cooldowns stay with their original account.
+- Switching invalidates previews; a send cannot inherit another account's confirmation.
+- Disconnect preserves authorization. Remote logout and local removal are separate, confirmed actions.
+
+See [multi-account storage and lifecycle](docs/MULTI_ACCOUNT.md) for exact behavior, legacy-profile protections and limitations. Background Telegram work is conservative and sequential; inactive accounts are not continuously polled.
+
+## Groups and permissions
+
+Discovery retrieves basic joined-dialog metadata first, including archived groups. It excludes broadcast channels and migrated duplicates from managed messaging destinations. Detailed permissions, available slow mode and visible bot metadata are fetched only through explicit inspections or fresh pre-send checks.
+
+**Allowed**, **Denied** and **Unknown** describe available Telegram evidence. Unknown fields and hidden moderation policies are reported honestly. A missing optional field does not prove that posting is forbidden—or safe.
+
+Inspection batches are bounded and cancellable. Telegram FloodWait pauses work, saves progress and persists the deadline. The app does not evade limits or immediately retry. See the [CLI/cache reference](docs/CLI_GUIDE.md) and [user guide](docs/USER_GUIDE.md).
+
+## Conversations and messages
+
+The chat browser supports private dialogs, groups, channels and Saved Messages. Reading a conversation explicitly loads a bounded page of history; it does not download entire histories. Local search and explicit remote search are distinct operations.
+
+Personal text sends require the active account, a selected cached conversation, preview and exact confirmation. Managed groups retain the stricter approved-destination and fresh-permission workflow. Each send reserves a persistent delivery record before submission. Lost connections and uncertain outcomes are never automatically replayed.
+
+Per-conversation drafts and local labels are account-scoped. Attachment download is explicit, bounded to known-size files up to 64 MiB, cancellable and non-overwriting. File upload, edit/delete/forward workflows and complete media previews are not represented as completed features.
+
+## Quick start
+
+### Requirements
+
+- Apple Silicon Mac; deployment target macOS 14+, with selective Liquid Glass on macOS 26+.
+- Xcode and its macOS SDK for source builds.
+- Python 3.13+ and the declared Telethon dependency in this checkout's `.venv`.
+- Your own Telegram API application credentials for authentication.
+
+### Build from source
+
+```bash
+git clone https://github.com/NipunChamodya/Telegrame-automator.git
+cd Telegrame-automator
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+./macos/build.sh
+open macos/build/Build/Products/Debug/TelegramManager.app
+```
+
+For the existing checkout:
+
+```bash
 cd ~/Desktop/TelegramManager
 ./macos/build.sh
 open macos/build/Build/Products/Debug/TelegramManager.app
 ```
 
-Open `macos/TelegramManager.xcodeproj` in Xcode to develop/debug. Minimum macOS is 14; native Liquid Glass is used selectively on macOS 26+. The app supports system/light/dark appearance, cached group browsing/search/filter/sort, details, controlled permission batches, multiline drafts, explicit destination approvals, one-use preview/confirmation, searchable history, and settings/backup/diagnostics.
+Quit the CLI before opening the desktop app. An exclusive lock protects each shared session/database. The GUI starts its Python subprocess itself; do not start the CLI as a prerequisite.
 
-**Packaging boundary:** this is a local development build using the checkout's `.venv`. It is not yet a self-contained, signed/notarized app for another Mac. No credentials/session files are included in the bundle. See [native development and packaging](docs/DESKTOP.md), [IPC contract](docs/IPC.md), and [validation report](docs/VALIDATION.md) for exact build/test results and remaining distribution work.
+**Source build ≠ standalone release.** The local `.app` uses this checkout's virtual environment. A portable embedded runtime, release signing/notarization and clean-Mac acceptance testing remain required. No download button or installer is advertised.
 
-The CLI remains available for maintenance:
+<details>
+<summary>CLI maintenance and Release builds</summary>
 
-## Start the CLI
-
-From the project directory:
-
-```sh
+```bash
 python3 main.py
+./macos/build.sh Release
+open macos/build/Build/Products/Release/TelegramManager.app
 ```
 
-The launcher detects the operating system and Python version, checks the constrained runtime dependencies declared in `pyproject.toml`, and opens the terminal dashboard. Python 3.13 or newer is required. macOS is the primary target; Linux can use environment credentials or credentials held only in memory. Windows is not supported.
+The CLI retains guided dependency/setup checks and never installs packages globally without approval. See [CLI_GUIDE.md](docs/CLI_GUIDE.md) for environment variables, commands, cache policies and recovery.
 
-If dependencies are missing, the launcher looks for the project's `.venv`. If it is ready, it restarts using that interpreter. Otherwise it explains the setup and requests approval **before** creating a virtual environment or installing packages. Installation uses the virtual environment's Python and only the project's declared runtime dependencies. It never installs packages into system Python. Declining or interrupting setup leaves existing application data alone. Package installation requires network access and a working pip index. Development tools are not installed by the startup wizard.
+</details>
 
-## First-run setup
+## Connect Telegram
 
-1. Launch `python3 main.py` in Terminal. Approve virtual environment setup if needed. Existing compatible dependencies are reused.
-2. Read the welcome screen and press Enter. Press Ctrl+C at any point to cancel safely.
-3. If API credentials are missing, follow the five-step tutorial printed in the terminal:
-   - Open the official portal, [my.telegram.org](https://my.telegram.org), and sign in with your phone number.
-   - Open **API development tools**. If necessary, register an application using these suggested values: App title **Telegram Group Manager**, Short name **telegramgroupmanager**, Platform **Desktop** if offered, Description **Personal Telegram group management application**. Complete other required portal fields; choose another short name if unavailable.
-   - Find the **API ID** (your application's numeric identifier) and **API Hash** (its secret credential).
-4. The wizard asks whether to open the portal in your browser, `[Y/n]`. It opens only after you approve; Enter accepts the displayed default. Choosing No lets you open the URL yourself. Browser failure shows the URL without retrying automatically. No portal browser window opens on a normal restored launch or when viewing Help.
-5. Enter the API ID, then the API Hash at its hidden prompt. Invalid formats give a specific explanation and re-prompt that field without echoing the hash. These credentials are different from a bot token or a login code.
-6. On macOS, approve saving credentials to Keychain if desired. macOS may request Keychain access. The application uses native Security framework calls, not secrets in subprocess arguments. Existing entries are never silently overwritten.
-7. Enter your phone number with country code at the hidden prompt. For Sri Lanka use `+947XXXXXXXX`, replacing each X with a digit and omitting the domestic leading `0`. Spaces, hyphens and parentheses are accepted, such as `+94 (7X) XXX-XXXX`. Invalid input is explained and can be corrected without restarting; your entered number is never echoed or logged. Telegram chooses the code delivery method: check the verified **Telegram** service chat in an already signed-in app first. SMS or another method may be offered, but is not guaranteed. The portal login code is separate from the code for this application. Enter the newest application login code, then your Telegram two-step verification password if enabled. Phone number, code and password prompts hide input.
-8. Review the verified Telegram account ID and approve binding this installation to it. The application validates/reuses your database before requesting credentials; it never resets existing records.
-9. After successful authentication, a **SETUP COMPLETED** screen shows database ready, session authorized and account connected. Answer **Would you like to discover your joined groups? [Y/n]**. Yes runs the existing discovery operation with progress; No opens the dashboard immediately. A saved Telegram cooldown pauses discovery until the wait expires. Nothing is sent.
+1. Open the app and choose **Connect** or **Add Account**.
+2. Obtain an API ID and API hash from [Telegram's official developer portal](https://my.telegram.org), under **API development tools**. The app explains the fields; API hash input is secret.
+3. Enter your phone number in international format, such as `+947XXXXXXXX` for a Sri Lankan mobile number.
+4. Enter the login code delivered by Telegram. The app does not promise a specific delivery channel.
+5. Enter your two-step verification password if Telegram requests it.
+6. Confirm the identity returned by Telegram before binding the profile.
 
-The walkthrough follows [Telegram's official credential instructions](https://core.telegram.org/api/obtaining_api_id) and [authorization documentation](https://core.telegram.org/api/auth). Field choices are suggestions; Telegram controls the actual portal form and code delivery methods.
+Existing sessions are reused where possible. No destination is approved and no message is sent during setup.
 
-API credentials can instead come from `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`. Environment credentials take precedence over Keychain. Set both variables; partial or invalid environment credentials stop setup rather than silently falling back. `.env.example` documents the variables; `.env` is not loaded automatically. Do not put secrets in shell history or source control.
+| Action | Meaning |
+| --- | --- |
+| Disconnect | Close the connection; retain session and cached data |
+| Log Out | Explicitly ask Telegram to invalidate this session; report failures honestly |
+| Remove local data | Separately confirmed removal of the selected supported profile's local data; does not promise remote logout |
 
-If Keychain access is unsupported, denied, or fails, the wizard offers credentials held only in memory for this launch. It never falls back to storing secrets in plaintext. Existing Keychain items are not overwritten. If you decline saving credentials, or use memory-only mode, supply them again next launch. Login codes, phone numbers and 2FA passwords are not saved in configuration.
-
-## Authentication migration fix
-
-The previous authentication failure was caused by configuring the login client with `request_retries=0`. In Telethon 1.45, `send_code_request()` issues `auth.SendCodeRequest`; Telethon's request loop catches `PhoneMigrateError`, looks up the DC supplied by Telegram, updates/saves its session and reconnects. With no retry iteration left, it then re-raises the migration exception instead of resubmitting the authentication request. App-level error handling displayed that exception; it did not itself prevent the initial switch. The prior phone check separately raised `ValueError` immediately for empty or formatted input.
-
-Startup now uses Telethon's documented constructor options with three request retries and two connection retries **only during authentication**, with flood sleeping disabled and no automatic background reconnection. This bounded auth budget also permits Telethon's normal retries for transient internal RPC failures. Exhausted migration, network errors and Telegram waits stop with a safe explanation; the app does not run an outer migration retry loop. No DC IDs or addresses are hardcoded in the application, no private Telethon migration methods are called, and no session tables are edited by application code.
-
-Once authorized, the app disconnects that client and opens a second client **sequentially against the same `account.session` file** with zero request/connection retries before opening the dashboard. It verifies the restored identity matches the authenticated account. This changes client instances, not the saved session location, credentials or SQLite records. Message delivery retains its existing zero-retry policy. If authorization expires during dashboard use, sending stops and asks you to relaunch for authentication; it does not start login inside a send operation. The original `tgm login` also uses the supported authentication retry budget and corrected phone prompts; its other commands retain zero retries.
-
-Phone normalization accepts `+` followed by a nonzero international prefix and 7–15 ASCII digits in total, with optional spaces, hyphens and parentheses. It does not guess a country code or convert domestic numbers. Both local validation failures and a confirmed Telegram `PhoneNumberInvalidError` allow explicit correction at the hidden prompt. Invalid/expired codes and incorrect 2FA passwords are not retried automatically. Existing authorized sessions skip phone/code/password prompts.
-
-## Subsequent launches
-
-Run the same command:
-
-```sh
-python3 main.py
-```
-
-The application checks the environment, obtains API credentials from the environment or Keychain, opens the original `account.session`, verifies authorization and account identity, validates the database, and loads cached groups. An authorized session does not request another login code. Expired authorization requests login using the same session path. An unexpected account ID blocks the dashboard; it does not silently rebind the installation.
-
-The dashboard displays cached groups immediately, without scanning Telegram or inspecting groups. If the last basic observation is older than the configured basic cache lifetime (default 24 hours), or the cache is empty, it offers a lightweight refresh. Discovery and detailed inspection are separate, explicit operations. Rate limits pause work and persist a cooldown; saved records remain available. Snapshots of groups you have left may remain visible, but every send rechecks membership and permissions.
-
-## Dashboard
-
-```text
-1. Discover / Refresh Groups
-2. View All Groups
-3. Search Groups
-4. Inspect Group Permissions
-5. Compose Message
-6. Review Approved Destinations
-7. Send to Selected Group
-8. View Delivery History
-9. View Account Status
-10. Settings
-11. Help
-12. Inspect Pending / Expired Metadata
-0. Exit
-```
-
-Options **2** and **3** show ten groups per page with Unicode names, actual Telegram IDs, effective permission status and permission timestamps. Use `n`/`p` for pages, `f` to filter allowed/denied/unknown/all, `s` to sort by name/ID/inspection time, and Enter or `q` to return. Search is case-insensitive, including Unicode. On narrow terminals, names are conservatively truncated for layout; the original value remains unchanged in SQLite and detailed JSON. Always select a destination by its **actual Telegram ID**, not its page position.
-
-Option **4** always performs a fresh inspection of one explicit group. Option **12** sequentially inspects missing or expired metadata and skips reusable cache entries. Option **10** shows cache settings and credential source without secrets. Option **11** explains setup, permissions, reconnecting and session protection without making requests.
-Discovery includes joined basic groups and supergroups, including archived dialogs. It excludes broadcast channels and migrated basic groups. Unsupported forum topic contexts can be shown in discovery but are blocked for sending.
-
-- `allowed`: available Telegram membership and text posting permissions permit sending.
-- `denied`: a reported restriction prevents sending.
-- `unknown`: permission or destination context cannot be verified; sending is blocked.
-
-Account `restricted` flags conservatively block sending. Telegram does not expose every human group rule, bot policy or account-wide spam restriction. Visible bot IDs come from full-chat metadata; their presence does not prove a moderation role or reveal their policies. Missing slow-mode metadata is reported as unknown. Telegram remains authoritative and may reject any request.
-
-## Discovery compatibility and partial results
-
-The discovery crash was reproduced offline with installed Telethon **1.45.0**. The original `analyze()` function in `telegram.py` (line 35 before the fix) read `permissions.send_messages`. `get_permissions(entity, me)` returns `ParticipantPermissions`, which has no such property. The old test fixture incorrectly invented it. The fixed code uses the real participant type to establish membership/admin status and the entity/participant `ChatBannedRights` (`view_messages`, `send_messages`, `send_plain`) to check text restrictions. Tests now use actual Telethon permission objects. An unverifiable participant remains **unknown**, never implicitly allowed.
-
-### Phase 1: lightweight synchronization
-
-Option **1** / `tgm discover` streams joined dialogs through `iter_dialogs(ignore_migrated=True)` with folder/archive filters unset. It includes archived groups and collects ID, title, type, username, available archive/membership state and observation time. It excludes broadcast channels, left/deactivated groups and migrated basic-group duplicates. Repeated IDs are processed once per scan. Inaccessible group entries are retained as restricted reference records, not authorized destinations.
-
-This phase makes **no per-group entity, permission or full-chat requests**. Dialog paging itself still uses Telegram's API and may encounter a rate limit. Each basic record and its scan counters commit together. New groups start with unknown permissions. Existing inspected metadata and timestamps survive basic title/archive updates; visibility alone never grants posting permission. Records absent from a later scan are retained rather than deleted.
-
-Counters distinguish current-scan groups, new records, basic fields updated, unchanged basic fields and fresh inspection caches skipped. `updated` refers to title/type/username/archive/membership changes, not merely a new observation timestamp. The dashboard separately shows total cached records, complete/incomplete metadata, fresh complete caches and groups awaiting permission verification. Unknown/expired permission snapshots display **Unknown**, even if an older raw JSON record said Allowed. Last basic scan state is retained when you run a separate detail inspection. An unfinished previous run is identified rather than presented as completed.
-
-### Phase 2: detailed inspection and cache policy
-
-Detailed inspection occurs only for an explicit single-group inspection, option **12**, `tgm inspect-pending`, or `tgm discover --details`. It is sequential, with a default minimum 0.5 seconds between detailed-request starts and no concurrent metadata workers. Basic groups reuse the full-chat response to verify membership, avoiding a second full-chat request. Supergroups use the supported single-member `GetParticipantRequest`. No `GetParticipantsRequest` enumeration is used to find bots. Telegram's full basic-chat response inherently includes its participant list; the app uses it for account membership, not a separate bot scan.
-
-Available fields include membership, text restrictions, slow mode, member counts and visible bot IDs. Missing fields remain unknown. Optional metadata failures do not by themselves deny posting. Human rules and hidden moderation policies are never inferred. **Allowed is technical text permission, not permission to advertise or send unsolicited messages.**
-
-Configure cache lifetimes through exported environment variables; `.env` is not auto-loaded:
-
-| Variable | Default | Purpose |
-| --- | ---: | --- |
-| `TGM_BASIC_TTL_SECONDS` | 86400 | When startup offers a basic refresh |
-| `TGM_PERMISSIONS_TTL_SECONDS` | 900 | Permission snapshot freshness |
-| `TGM_MEMBERS_TTL_SECONDS` | 3600 | Member-count freshness |
-| `TGM_METADATA_TTL_SECONDS` | 21600 | Slow-mode/bot metadata freshness |
-| `TGM_REQUEST_INTERVAL_SECONDS` | 0.5 | Minimum spacing of detail-request starts; 0–5 seconds |
-
-TTL values accept 0–31536000 seconds; zero disables that cache. Different timestamps are stored inside the existing group metadata JSON. Legacy records without these timestamps need an explicit inspection before being considered fresh. A supergroup with expired permissions but fresh counts/bot metadata refreshes its entity and participant only, reusing the other cached fields. Basic-chat membership and member counts share a full-chat endpoint, so those fields refresh together. A confirmed partial/unknown result is briefly cached for the shortest detail TTL to avoid hammering unavailable data; it remains unknown/incomplete and never becomes authorization to send. Network failures are not cached as successful inspections.
-
-Manual commands:
-
-```sh
-tgm discover                         # Basic dialogs only
-tgm discover --details               # Basic scan, then missing/expired details
-tgm inspect-pending                  # Resume missing/expired details; skip fresh results
-tgm inspect-pending --force          # Explicitly bypass detail cache once
-tgm discover --details --force       # Basic scan plus forced detail refresh
-tgm inspect -- -1001234567890         # Fresh inspection of one chosen group
-tgm groups --search 'ශ්‍රී' --permission unknown --sort name --page 1 --page-size 10
-```
-
-Standalone `tgm groups` keeps stdout as Unicode JSON lines; its page summary goes to stderr for pipe/script compatibility.
-
-`--force` does not bypass Telegram cooldowns or restrictions. Sending always forces fresh authorization, identity, membership, text-permission and slow-mode checks after confirmation; caches are never the sole sending authority.
-
-### Cooldowns, interruption and BrokenPipeError
-
-FLOOD_WAIT records the actual Telegram wait duration as an absolute epoch deadline. The dashboard displays remaining seconds. Completed work is committed; further requests are blocked until expiry. There is no automatic wake-up/resume or immediate retry. After waiting, explicitly select option **1** or **12** / the corresponding CLI command. A resumed basic scan streams dialogs again with idempotent upserts; a resumed metadata pass skips completed fresh results. Unknown/optional API metadata errors remain group-local; network, authorization and database failures stop safely with the correct category.
-
-The historical `BrokenPipeError` message lacked a traceback, so its actual origin cannot be established retrospectively. New sanitized I/O diagnostics always identify the boundary (`dialog_iteration`, `entity_lookup`, `full_chat_metadata`, `participant_permissions`, or `terminal_output`), exception class, relevant module/line and whether a record had committed. They exclude exception messages, request objects, credentials and absolute user paths. A request boundary identifies where an error surfaced; its included safe frames distinguish Telethon/asyncio internals when available. No assumption is made that BrokenPipeError means FloodWait.
-
-Expected network failures preserve partial progress and return to the dashboard, where cached views remain available. If the connection is lost, exit/relaunch to restore the session before explicitly continuing. A closed stdout pipe or failed prompt flush cannot support a dashboard: the app stops the operation, preserves committed work and exits with a short stderr explanation. It does not keep requesting Telegram data into a broken output stream. Delivery errors remain uncertain/rejected according to the existing ledger and are never retried automatically.
-
-### Unicode and terminal safety
-
-Sinhala, Tamil, English, combining marks and emoji/ZWJ sequences remain unchanged in storage. New metadata JSON uses UTF-8-preserving serialization; old ASCII-escaped JSON decodes normally without re-encoding migrations. Human-readable JSON uses `ensure_ascii=False`. Terminal rendering removes executable ANSI/control sequences and bidi display controls while preserving combining marks, ZWJ/ZWNJ and variation selectors. JSON previews represent unsafe controls as visible escapes, preserving the exact message value rather than silently changing its body. Unsupported terminal encodings use explicit backslash escapes instead of crashing; use a UTF-8 terminal for readable Sinhala/Tamil. Column widths are conservative standard-library estimates: complex emoji/Indic fonts may not align identically in every terminal.
-
-### SQLite preservation and measured operation counts
-
-Original `groups`, `deliveries`, and `cooldowns` definitions and records remain unchanged. One additive `sync_runs(account PRIMARY KEY, data TEXT)` table stores account-isolated scan counters/state and the previous basic scan. `CREATE TABLE IF NOT EXISTS` is an atomic, idempotent additive upgrade; it never rebuilds the database or deletes records. WAL remains enabled. Basic group upsert and scan progress share one short transaction. UPSERT replaces `INSERT OR REPLACE`, avoids delete/insert semantics and skips identical payload updates. Primary-key lookups replace loading all groups to check a destination. Lists decode a bounded page; aggregates and pending inspections stream records. Python retains only compact seen IDs for scan deduplication, not all dialog/metadata objects. Existing account indexes are sufficient; no speculative indexes were added.
-
-An offline 32-basic-group comparison against repository baseline `9917c95` measured **96 → 0 mocked per-group API-boundary calls** for the default scan (`get_entity`, `get_permissions`, raw full-chat calls; dialog paging excluded). SQLite commits were **64 → 34**, including new persisted progress. The prior benchmark’s explicit 32-group detail pass made 64 boundary calls (entity + full-chat per basic group), and a second fresh-cache pass made **0**. These are operation counts, not live network throughput, memory-use or elapsed-time claims. No M2/8 GB performance benchmark or live Telegram load test was performed.
-
-## Sanitized development diagnostics
-
-For file/line diagnostics on programming errors:
-
-```sh
-TGM_DEV_MODE=1 python3 main.py
-```
-
-Normal mode reports only the error class. Development mode adds package-relative filenames, line numbers, function names and a statically referenced missing attribute where available. It excludes exception messages, request representations, source lines, frame locals, exception chains and absolute user paths. Do not replace this with raw traceback/exception logging, which can expose Telegram request data. Telegram RPC errors, confirmed permission restrictions, network failures and SQLite failures have separate handling; unexpected programming errors are no longer described as generic network/Keychain troubleshooting.
-
-## Compose and send safely
-
-Use option **5** to compose plain text or load a UTF-8 file. Choose **1. Compose directly**, **2. Import UTF-8 file**, or **0. Cancel**. Typed message text is never interpreted as a filename. For direct multiline input, enter a single `.` on its own line to finish. The preview shows the complete draft. Empty messages and messages over 4096 UTF-16 units are rejected; messages are not automatically split.
-
-Use option **6** to select a discovered group by exact ID, a visible page index, or search, inspect its fresh permissions, and explicitly select it. The current CLI send destination is selected in memory; persistent destination approval does **not** authorize a send. Replacing the draft clears the destination selection. Drafts and explicit destination approvals are account-isolated in the private database. A message's exact send confirmation is never persistent or standing approval. GUI preview tokens are short-lived and single use.
-
-Use option **7** to verify account authorization, recheck permissions, and display the exact destination, account ID and complete message. Type the displayed `SEND <destination-id>` phrase to approve. Any other response cancels. The service checks authorization, account identity, permissions and slow mode again immediately before delivery. Selection is cleared before submission so it cannot act as standing approval.
-
-Messages are plain text without Markdown/HTML parsing or link previews. No bulk sending, background scheduler, unattended approval flag, attachments, forwarding, paid messages or forum topic sending is implemented. Review group rules in Telegram before posting.
-
-## Existing CLI compatibility
-
-The original package name and command-line entry point remain available after installation. The original commands use the existing environment credential interface:
-
-```sh
-source .venv/bin/activate
-# Set TELEGRAM_API_ID and TELEGRAM_API_HASH securely in your environment first.
-tgm login
-tgm discover
-tgm groups --search engineering
-tgm inspect -- -1001234567890
-tgm send -- -1001234567890
-tgm send --file message.txt -- -1001234567890
-tgm history
-```
-
-Use `--` before negative IDs. The interactive launcher and original CLI share the same application directory, database, ledger, cooldowns and Telethon session. Run one instance at a time. The old CLI can still operate without the launcher's non-secret configuration; it retains its explicit confirmation behavior.
-
-## Local storage and security
-
-The default directory is unchanged:
-
-```text
-~/Library/Application Support/TelegramGroupManager/
-    account.session      # Telegram authorization credential; keep secret
-    manager.sqlite3      # Account-isolated group snapshots, delivery ledger, cooldowns
-    manager.lock         # Prevents simultaneous manager instances
-    config.json          # Version and bound account ID only; no API secrets
-```
-
-`TGM_DATA_DIR` selects a dedicated local directory you own. The application applies directory mode 0700, file mode 0600 and umask 077. It rejects symlinks directly within the directory and rejects files owned by another user or hard linked elsewhere. Do not use a shared or cloud-synced folder. Keychain credentials are scoped to the resolved data directory, so changing it selects a different Keychain item and session.
-
-Keychain contains one generic-password item named `org.telegram-group-manager.credentials.<directory-hash>`, with your macOS user ID as its account field. Native calls are tested with mocked framework functions; actual Keychain access still needs a controlled macOS smoke test.
-
-SQLite is checked for integrity, expected tables/columns and its delivery deduplication index before normal initialization. Existing tables are not dropped, records are not deleted, and incompatible or corrupt databases are rejected instead of reset. If a bound installation loses its database file, startup requires backup recovery rather than creating an empty delivery ledger. The original tables are retained; additive `sync_runs`, `drafts`, `approvals` and `delivery_notes` tables are initialized idempotently. The upgrade is idempotent and tested against the prior schema. It is not a general future schema migration framework.
-
-Logging emits sanitized JSON error events with error class names, excluding API hashes, session contents, verification codes, passwords and message bodies. The explicit preview displays your composed message, so avoid screen sharing sensitive content. There is no remote telemetry. FileVault and a locked macOS account protect the session and unencrypted local metadata at rest; filesystem modes alone do not encrypt them. Python cannot guarantee zeroing secrets in process memory.
-
-## Delivery history and duplicate prevention
-
-Option 8 / `tgm history` shows the latest 100 delivery records for the connected account. The ledger stores account, destination, SHA-256 of the exact message, Telegram random ID, timestamps, status and a sanitized result, not a full historical message body. New desktop-era deliveries also retain a sanitized prefix (up to 160 characters plus an ellipsis) in a separate private table for history; drafts persist their full text when explicitly saved. These fields are sensitive plaintext in the private database. Legacy records remain unchanged and may have no preview or Telegram message ID.
-
-A unique `(account, destination, message hash)` reservation is committed **before** submission. Exact duplicate text to the same destination is blocked across restarts for every status, including failed attempts. There is no retry/override button. Telegram random IDs provide an additional server deduplication mechanism. A process lock prevents concurrent instances using the same directory.
-
-Statuses: `pending`, `sent`, `blocked`, `rejected`, `uncertain`. `sent` means Telegram acknowledged the request, not that every member read it. A network failure, interruption, server failure or database error after submission can leave `uncertain` or `pending` even if Telegram accepted the message. Inspect Telegram manually before considering another operation. Never delete the ledger or alter text to defeat duplicate protection.
-
-FLOOD_WAIT and slow-mode errors persist the returned wait duration as a conservative account-wide cooldown. Peer spam flood errors block further sending locally for at least 24 hours; that minimum is not evidence Telegram has lifted a restriction. Authentication waits before identity is known use a reserved account-zero cooldown in the same database. No automatic flood-wait sleeps, uncertain delivery retries, alternate-account tactics or restriction bypasses are implemented. Bounded authentication connection/request retries are described above.
-
-## Recovery
-
-- **Missing dependencies / failed installation:** check pip output, network/index access, disk space and project permissions. Rerun `python3 main.py` and approve setup when ready. A malformed or old `.venv` is left untouched. Repair/recreate only the project virtual environment with Python 3.13+; never remove the private data directory to fix packages.
-- **Interrupted setup:** relaunch. Completed Keychain entries and existing sessions remain available. Incomplete configuration writes are not published; startup releases its process lock when the process exits.
-- **Keychain denied or locked:** unlock your login Keychain and relaunch, or explicitly choose credentials in memory. Use macOS Keychain Access to review a saved item. To rotate credentials, explicitly manage that item or use environment overrides. The app never replaces existing secrets automatically.
-- **Invalid API ID or Hash format:** follow the field-specific explanation and re-enter that field. The hash stays hidden and is not echoed in validation errors. If Telegram rejects a correctly formatted credential pair, review API development tools, then correct environment values or explicitly manage the saved item using macOS Keychain Access and relaunch.
-- **Invalid phone number:** use `+` and the country code; for Sri Lanka, `+947XXXXXXXX`, replacing X with digits. Omit the domestic leading `0`. You can correct local validation failures or a confirmed Telegram rejection at the same prompt. Input stays hidden.
-- **Data-center migration:** Telethon handles normal migration within the bounded authentication retry budget. If migration still fails, check network access and relaunch using the saved session. Never delete or manually edit the session to change data centers.
-- **Invalid verification code:** use the newest code for this application, not the developer portal login code or API ID. Relaunch when ready; the app does not retry codes automatically.
-- **Expired verification code:** relaunch to explicitly request a new code. Do not reuse the old code.
-- **Two-step verification failure:** use the Telegram account password, not the API Hash or macOS password. Check your account in Telegram and relaunch. Password attempts are not automatically retried. The app does not create Telegram accounts.
-- **Expired authorization:** relaunch and complete the hidden login prompts. The original session path is reused; session files are not automatically deleted/reset.
-- **Unexpected account identity:** restore the matching session from a secure backup or use a separate `TGM_DATA_DIR` for another account. Do not edit the binding just to bypass the mismatch check.
-- **Network disconnect / request BrokenPipeError:** read the sanitized operation/module/line diagnostic, use cached views, and exit/relaunch to restore the connection. Explicitly resume discovery or pending inspection when ready. Never automatically retry an uncertain delivery.
-- **Closed output pipe:** restore terminal/stdout access and relaunch. The app exits rather than repeatedly writing/requesting into a closed pipe. Previously committed group records and counters remain available.
-- **FLOOD_WAIT / slow mode:** wait at least the reported duration. Do not remove cooldowns. For unknown account-wide restrictions, review account status in Telegram; do not probe Telegram limits intentionally.
-- **SQLite or permission failure:** stop the app, check free disk space and ownership of the dedicated directory, and restore a known-good backup if necessary. No automatic database repair/reset is performed. Keep the ledger and session together.
-- **Compromised session:** revoke it using Telegram Settings → Devices and secure your macOS account. Never share `account.session`, database copies or Keychain exports.
-
-Back up the entire private directory securely with the application stopped. Never publish these backups. Losing the ledger loses its duplicate history. A different data directory has independent local locking and deduplication; do not run multiple copies against one Telegram account to evade limits.
+Treat `account.session` as an authentication credential. Never share it, put it in Git, or include it in screenshots. See [USER_GUIDE.md](docs/USER_GUIDE.md) for walkthroughs and recovery.
 
 ## Architecture
 
-This extends the original `telegram_manager` package rather than replacing it:
-
-- `main.py`, `bootstrap.py`: standard-library environment checks, consented virtual environment setup and interpreter restart.
-- `security.py`, `configuration.py`: private storage/lock, native Keychain and non-secret account binding.
-- `setup_wizard.py`, `application.py`: credentials, session restoration, first-run authentication and startup cleanup.
-- `guidance.py`, `error_messages.py`: terminal tutorial, consented browser opening, Help and safe error explanations.
-- `dashboard.py`: terminal menu, cached views, refresh, drafts, single selection and explicit send approval.
-- `telegram.py`, `storage.py`, `models.py`: original async service/ledger extended with two-phase sync, streaming queries and scan status.
-- `cache.py`, `terminal.py`: lightweight freshness policies and Unicode-safe terminal output; standard library only.
-- `cli.py`: existing `tgm` command interface.
-
-## Tests and validation
-
-Install development dependencies only into the project environment:
-
-```sh
-.venv/bin/python -m pip install -e '.[dev]'
-.venv/bin/python -m unittest discover -s tests -v
-.venv/bin/python -m pytest -q
-.venv/bin/python -m compileall -q main.py src tests
-.venv/bin/python -m ruff check main.py src tests
+```mermaid
+flowchart TD
+    Views[Native SwiftUI views] --> Model[MainActor AppModel]
+    Model --> Transport[Actor-owned subprocess transport]
+    Transport <-->|Bounded typed JSON-lines over owned pipes| IPC[Python IPC service]
+    IPC --> Profiles[Account profile registry and operation lock]
+    Profiles --> Service[Existing Telegram service and chat features]
+    Service --> Telethon[Telethon / asyncio]
+    Telethon <-->|Telegram MTProto| Telegram[Telegram API]
+    Profiles --> SQLite[Per-profile SQLite / delivery ledger]
+    Profiles --> Sessions[Per-profile private session files]
+    Profiles --> Keychain[Directory-scoped macOS Keychain items]
+    CLI[Existing CLI] --> Service
 ```
 
-Tests mock all Telegram network operations and Keychain framework calls. They must never send real messages. The suites cover dependency setup and cancellation, first-run/existing configuration, account mismatch, interrupted initialization, permission errors, database creation and preservation, atomic duplicate protection, session restoration and 2FA, dashboard views, explicit approval, permission changes, and rate limits.
+There is no HTTP listener, Electron, browser-based UI or separate Swift Telegram implementation. See [ARCHITECTURE.md](docs/ARCHITECTURE.md), [IPC.md](docs/IPC.md) and [MULTI_ACCOUNT.md](docs/MULTI_ACCOUNT.md).
 
-Validation in the current environment (Python 3.13.4, Telethon 1.45.0): **172 tests and 54 subtests passed**, with no skipped modules. Syntax checks pass. All Telegram network interactions in tests are mocked. Coverage includes Sinhala/Tamil/emoji output and storage, control sanitization, ASCII-terminal fallback, JSON previews, lightweight request counts, two-phase inspection, separate cache lifetimes, partial recovery, cooldown persistence, request/output BrokenPipeError separation, legacy database upgrades, no-op upserts, account isolation, pagination/filtering, dashboard statistics, session restoration and existing sending safety.
+| Technology | Role |
+| --- | --- |
+| Swift / SwiftUI / AppKit | Native windows, navigation, tables, menus, file panels and accessibility semantics |
+| Python 3.13+ / asyncio | Reusable backend and serialized asynchronous operations |
+| Telethon 1.45.x tested; dependency constrained below 2 | Supported Telegram MTProto authentication and requests |
+| SQLite | Account-scoped caches, drafts, approvals, cooldowns and atomic delivery reservations |
+| macOS Keychain | API credential storage without plaintext configuration fallback |
+| Pytest / unittest / XCTest | Mocked backend, security, IPC and native state/transport verification |
 
-The real `python3 main.py` startup is checked with an isolated temporary directory and cancelled at the welcome prompt before credentials or Telegram contact. Full startup/session restoration and the dashboard are exercised with mocks. No live Telegram operation, send, Keychain modification or browser opening was performed for this upgrade. The previous live discovery/connection results are user-reported, not re-verified here. Ruff is unavailable in the current virtual environment, so lint remains unverified. Run it after installing the declared dev dependencies. No Python GUI framework or heavy rendering dependency was added. The native SwiftUI target builds in Debug and Release; 17 Swift tests pass. Interactive window launch remains unverified in this managed environment; see the validation report for the observed launch failures.
+## Security and privacy
 
-## API references
+- Existing credentials, account binding, sessions and databases are preserved.
+- Additional accounts have independent private session/database directories and Keychain namespaces.
+- Strict IPC validates methods, types, sizes and identifiers; it cannot execute arbitrary commands.
+- Secrets never return through status responses or diagnostic export.
+- Exact destination confirmation, fresh identity checks and atomic deduplication precede delivery.
+- Telegram rate limits and restrictions are respected. No automatic bulk messaging, forwarding or uncertain-delivery retries.
+- Drafts, dialog previews and delivery previews are sensitive local plaintext protected by file permissions; backups require the same care.
 
-- [Telethon client/authentication API and retry options](https://docs.telethon.dev/en/stable/modules/client.html)
-- [Telegram migration error meanings](https://core.telegram.org/api/errors)
-- [Telethon request/migration implementation](https://github.com/LonamiWebs/Telethon/blob/v1/telethon/client/users.py)
-- [Telethon session sign-in behavior](https://docs.telethon.dev/en/stable/basic/signing-in.html)
-- [Telegram rights model](https://core.telegram.org/api/rights)
-- [Telegram text restriction flags](https://core.telegram.org/constructor/chatBannedRights)
-- [Telethon ParticipantPermissions implementation](https://github.com/LonamiWebs/Telethon/blob/v1/telethon/tl/custom/participantpermissions.py)
-- [Telegram sendMessage and random IDs](https://core.telegram.org/method/messages.sendMessage)
+The development configuration is not App-Sandbox-contained. No session or credential export is provided. Telegram Manager is an independent third-party client, not affiliated with Telegram. Read [SECURITY.md](SECURITY.md) before reporting vulnerabilities.
+
+## Testing and release status
+
+Current verification: **216 Python tests, 59 subtests and 34 Swift tests passed**. Debug and Release builds succeeded and pass strict code-signature verification. Exact evidence, failures and blockers are recorded in [VALIDATION.md](docs/VALIDATION.md).
+
+| Quality gate | Evidence |
+| --- | --- |
+| Backend / IPC / account isolation | Mocked tests; current counts in the validation report |
+| Native unit/integration tests | XCTest results in the validation report |
+| Debug / Release compilation | Actual Xcode build results reported separately from launch |
+| Interactive launch / screenshots | Not inferred from compilation; see [UI_VALIDATION.md](docs/UI_VALIDATION.md) |
+| Live authentication / sending | Not performed during automated development |
+| Distribution readiness | Incomplete; external Python dependency and release acceptance work remain |
+
+```bash
+.venv/bin/python -m pytest -q
+.venv/bin/python -m compileall -q main.py src tests scripts
+./macos/test.sh
+./macos/build.sh Debug
+./macos/build.sh Release
+```
+
+Automated tests must use fixtures and isolated temporary storage. They must never send real Telegram messages. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Performance approach
+
+Lightweight discovery avoids per-group detail calls. Cached views use SQLite; histories paginate; inspection batches, protocol queues and media downloads are bounded. No continuous Telegram polling or simultaneous account-scanning loop is introduced.
+
+Run the synthetic local-cache benchmark with `.venv/bin/python scripts/benchmark_cache.py`. Its output describes only that offline workload, not GUI RAM, launch time or live Telegram throughput. No idle CPU/RAM or Apple Silicon speed claims are made without measurements.
+
+## Project layout
+
+```text
+macos/
+  TelegramManager.xcodeproj/    Native application project
+  TelegramManager/              App, views, view model, models, transport, resources
+  TelegramManagerTests/         Native model and transport tests
+src/telegram_manager/           Existing backend, CLI and IPC extensions
+tests/                          Mocked Python and subprocess integration tests
+docs/                           Architecture, usage, security boundaries and validation
+scripts/                        Build and offline benchmark tools
+main.py                         CLI launcher
+pyproject.toml                  Declared Python dependencies
+```
+
+## Troubleshooting
+
+| Problem | Safe next step |
+| --- | --- |
+| App will not open / Launch Services error | Verify the signed bundle and follow [desktop diagnostics](docs/DESKTOP.md); do not delete sessions |
+| Python runtime missing | Restore the project's Python 3.13 `.venv`; reconnect from the app after setup |
+| Backend unavailable | Use reconnect/recovery; verify runtime and close another CLI/backend owning the profile |
+| Invalid or expired code | Correct the code or restart the phone/code step when expiry is reported |
+| Two-step verification failure | Retry the account's password; never put it in logs or issue reports |
+| FloodWait | Wait for the saved deadline, then explicitly resume |
+| Permission unknown | Run a bounded explicit inspection; hidden rules can remain unknown |
+| Session restoration failure | Reauthenticate the same profile; do not reset its database or copy another account's session |
+| Keychain access denied | Unlock Keychain and review its permission prompt; no plaintext-secret workaround is provided |
+
+For diagnostic reports, share only sanitized exports and reproducible fixture steps—not account databases or session files.
+
+## Roadmap
+
+**Implemented:** native backend integration, cached group management, controlled messaging, isolated account profiles, bounded conversation reads and private local drafts.
+
+**Acceptance work:** interactive launch investigation, full UI screenshot matrix, accessibility and clean-Mac verification, live account acceptance under explicit authorization.
+
+**Planned:** verified embedded Python runtime, signed/notarized distribution, DMG installer, update/rollback strategy, richer media/actions, cached profile photos and broader performance benchmarking. Planned features are not release promises.
+
+## Contributing, licensing and author
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). Security reporting guidance is in [SECURITY.md](SECURITY.md); no unverified contact address is published.
+
+**Licensing has not yet been specified.** No repository license file is present; public visibility is not an open-source license.
+
+Project repository: [NipunChamodya/Telegrame-automator](https://github.com/NipunChamodya/Telegrame-automator). Developer GitHub identity: [@NipunChamodya](https://github.com/NipunChamodya). Built using Apple's native frameworks, Python, Telethon and SQLite; no affiliation or sponsorship is implied.

@@ -6,6 +6,9 @@ actor BackendClient {
     private let runtimeOverride: (URL, URL)?
     init(runtime: (URL, URL)? = nil) { runtimeOverride = runtime }
     private var process: Process?
+    private var acceptingRequests = false
+    private var stopping = false
+    private var shutdownWaiters: [CheckedContinuation<Void, Never>] = []
     private var input: FileHandle?
     private var output: FileHandle?
     private var errorOutput: FileHandle?
@@ -17,10 +20,17 @@ actor BackendClient {
     private var stderrBytes = 0
     private var generation = UUID()
     private var startupFailure: BackendFailure?
+    private var stdoutEnded = false
+    private var terminationReported = false
     private var readTask: Task<Void, Never>?
     private var readContinuation: AsyncStream<Data>.Continuation?
 
     func setEventHandler(_ handler: @escaping EventHandler) { events = handler }
+    func localDiagnostics() -> String {
+        let running = process?.isRunning == true
+        let pid = running ? String(process!.processIdentifier) : "None"
+        return "Managed child running: \(running ? "Yes" : "No")\nManaged child PID: \(pid)\nAccepting requests: \(acceptingRequests ? "Yes" : "No")\nShutting down: \(stopping ? "Yes" : "No")\nOutstanding requests: \(pending.count)\nDiagnostic stderr bytes (content withheld): \(stderrBytes)"
+    }
 
     static func runtimeLocation() throws -> (URL, URL) {
         let fm = FileManager.default
@@ -41,14 +51,26 @@ actor BackendClient {
     }
 
     func start() throws {
-        if process?.isRunning == true { return }
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["TGM_UI_FIXTURE"] == "1" { throw BackendFailure(code: "fixture_only", message: "Synthetic screenshot mode cannot start the backend.") }
+        #endif
+        guard !stopping else { throw BackendFailure(code: "backend_stopping", message: "The previous backend is still shutting down. Wait before reconnecting.") }
+        if process?.isRunning == true {
+            guard acceptingRequests else { throw startupFailure ?? BackendFailure.disconnected }; return
+        }
         if process != nil { failAll(BackendFailure.disconnected); cleanup() }
         signal(SIGPIPE, SIG_IGN)
         generation = UUID()
         startupFailure = nil
+        stdoutEnded = false
+        terminationReported = false
         let token = generation
         let (python, source) = try runtimeOverride ?? Self.runtimeLocation()
         let task = Process(), stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
+        // No inherited copy may keep the child stdin writer alive after GUI death.
+        for handle in [stdin.fileHandleForReading, stdin.fileHandleForWriting, stdout.fileHandleForReading, stdout.fileHandleForWriting, stderr.fileHandleForReading, stderr.fileHandleForWriting] {
+            guard fcntl(handle.fileDescriptor, F_SETFD, FD_CLOEXEC) == 0 else { throw BackendFailure(code: "pipe_setup", message: "Could not create private backend communication pipes.") }
+        }
         task.executableURL = python
         task.arguments = ["-u", "-m", "telegram_manager.ipc"]
         var environment = ProcessInfo.processInfo.environment
@@ -79,7 +101,14 @@ actor BackendClient {
             Task { await self?.recordDiagnostics(data.count, generation: token) }
         }
         task.terminationHandler = { [weak self] _ in Task { await self?.terminated(generation: token) } }
-        do { try task.run(); process = task }
+        do {
+            try task.run(); process = task; acceptingRequests = true
+            // Only the child owns these ends after spawn. Keeping a parent writer
+            // open prevents EOF detection when the child closes stdout.
+            try? stdin.fileHandleForReading.close()
+            try? stdout.fileHandleForWriting.close()
+            try? stderr.fileHandleForWriting.close()
+        }
         catch { cleanup(); throw BackendFailure(code: "launch_failed", message: "Could not launch the project Python backend. Verify its runtime and file permissions.") }
     }
 
@@ -88,7 +117,7 @@ actor BackendClient {
 
     func request(_ method: String, params: [String: JSONValue] = [:], timeout: TimeInterval = 120) async throws -> JSONValue {
         try Task.checkCancellation()
-        try start()
+        guard acceptingRequests, process?.isRunning == true, !stopping || method == "shutdown" else { throw startupFailure ?? BackendFailure.disconnected }
         let id = UUID().uuidString
         latestRequest = id
         let request = JSONValue.object(["id": .string(id), "method": .string(method), "params": .object(params)])
@@ -103,7 +132,7 @@ actor BackendClient {
                     await self?.expire(id)
                 }
                 do { try input.write(contentsOf: data) }
-                catch { failAll(BackendFailure.disconnected); process?.terminate() }
+                catch { acceptingRequests = false; failAll(startupFailure ?? BackendFailure.disconnected); process?.terminate() }
             }
         } onCancel: { [weak self] in Task { await self?.cancel(id) } }
     }
@@ -111,8 +140,10 @@ actor BackendClient {
     private func receive(_ data: Data, generation token: UUID) {
         guard token == generation else { return }
         if data.isEmpty {
-            failAll(BackendFailure.disconnected)
-            process?.terminate()
+            stdoutEnded = true; acceptingRequests = false
+            failAll(startupFailure ?? BackendFailure.disconnected)
+            if process?.isRunning == true { process?.terminate() }
+            else { finishTermination(generation: token) }
             return
         }
         buffer.append(data)
@@ -127,6 +158,7 @@ actor BackendClient {
             if message["id"] == .null && !message["ok"].bool && !message["error"]["code"].string.isEmpty {
                 let failure = BackendFailure(code: message["error"]["code"].string, message: safeDisplay(message["error"]["message"].string))
                 startupFailure = failure
+                acceptingRequests = false
                 failAll(failure)
                 continue
             }
@@ -140,8 +172,11 @@ actor BackendClient {
     }
 
     private func terminateMalformed() {
+        acceptingRequests = false
+        let failure = BackendFailure(code: "protocol_error", message: "The backend returned invalid protocol data. Restart it before continuing; uncertain deliveries must be checked in history.")
+        startupFailure = failure
         process?.terminate()
-        failAll(BackendFailure(code: "protocol_error", message: "The backend returned invalid protocol data. Restart it before continuing; uncertain deliveries must be checked in history."))
+        failAll(failure)
     }
     private func fail(_ id: String, _ error: Error) {
         timeouts.removeValue(forKey: id)?.cancel()
@@ -168,29 +203,60 @@ actor BackendClient {
     }
     private func terminated(generation token: UUID) {
         guard token == generation else { return }
+        // Stdout may still contain a typed startup failure after process exit.
+        // Its serial reader drains frames and EOF before closing handles.
+        guard stdoutEnded else { return }
+        finishTermination(generation: token)
+    }
+    private func finishTermination(generation token: UUID) {
+        guard token == generation, !terminationReported else { return }
+        terminationReported = true
         let failure = startupFailure ?? BackendFailure.disconnected
         failAll(failure)
         cleanup(); process = nil
         events?(.object(["event": .string("backend_stopped"), "data": .object(["error": .object(["code": .string(failure.code), "message": .string(failure.message)])])]))
     }
     private func cleanup() {
+        acceptingRequests = false
         readContinuation?.finish(); readContinuation = nil; readTask?.cancel(); readTask = nil
         output?.readabilityHandler = nil; errorOutput?.readabilityHandler = nil
         try? input?.close(); try? output?.close(); try? errorOutput?.close()
         input = nil; output = nil; errorOutput = nil
     }
     func shutdown() async {
-        guard let task = process, task.isRunning else {
-            failAll(BackendFailure.disconnected)
-            cleanup(); process = nil
+        if stopping {
+            await withCheckedContinuation { shutdownWaiters.append($0) }
             return
         }
-        _ = try? await request("shutdown", timeout: 2)
-        try? input?.close()
-        if task.isRunning {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if task.isRunning { task.terminate() }
+        stopping = true
+        defer {
+            stopping = false
+            let waiting = shutdownWaiters; shutdownWaiters.removeAll()
+            for waiter in waiting { waiter.resume() }
         }
-        failAll(BackendFailure.disconnected); cleanup(); process = nil
+        guard let task = process else { failAll(BackendFailure.disconnected); cleanup(); return }
+        if task.isRunning && acceptingRequests { _ = try? await request("shutdown", timeout: 2) }
+        acceptingRequests = false
+        try? input?.close()
+        for _ in 0..<40 {
+            if !task.isRunning { break }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        if task.isRunning { task.terminate() }
+        for _ in 0..<40 {
+            if !task.isRunning { break }
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        // Escalate only this actor's still-running child. Never inspect or kill
+        // another application's process or attempt to remove its storage lock.
+        if task.isRunning { Darwin.kill(task.processIdentifier, SIGKILL) }
+        await Task.detached { task.waitUntilExit() }.value
+        failAll(BackendFailure.disconnected)
+        cleanup(); process = nil
+    }
+    func restart() async throws {
+        await shutdown()
+        try Task.checkCancellation()
+        try start()
     }
 }

@@ -6,6 +6,7 @@ struct GroupsView: View {
     let inspectionMode: Bool
     var body: some View {
         VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
             HStack {
                 Picker("Permission", selection: $model.permissionFilter) { Text("All permissions").tag("all"); Text("Allowed").tag("allowed"); Text("Restricted").tag("denied"); Text("Unknown").tag("unknown") }.frame(width: 165)
                 Picker("Type", selection: $model.kindFilter) { Text("All groups").tag("all"); Text("Groups").tag("group"); Text("Supergroups").tag("supergroup") }.frame(width: 140)
@@ -13,6 +14,7 @@ struct GroupsView: View {
                 Spacer()
                 Text("\(model.totalGroups) groups").font(.caption).foregroundStyle(.secondary)
             }.padding(16)
+            }.fixedSize(horizontal: false, vertical: true)
             if inspectionMode {
                 HStack {
                     Label("\(model.status["overview"]["pending"].int) pending · \(model.selectedInspection.count) selected", systemImage: "checkmark.shield").font(.callout)
@@ -46,9 +48,9 @@ struct GroupsView: View {
             Divider()
             HStack {
                 Text("Cached rows only — opening this screen makes no Telegram requests.").font(.caption).foregroundStyle(.secondary)
-                Spacer(); Button { model.page -= 1; Task { await model.loadGroups() } } label: { Image(systemName: "chevron.left") }.disabled(model.page == 0)
+                Spacer(); Button { model.page -= 1; Task { await model.loadGroups() } } label: { Image(systemName: "chevron.left") }.disabled(model.page == 0 || model.busy).help("Previous group page").accessibilityLabel("Previous group page")
                 Text("Page \(model.page + 1)").font(.caption).monospacedDigit()
-                Button { model.page += 1; Task { await model.loadGroups() } } label: { Image(systemName: "chevron.right") }.disabled((model.page + 1) * model.pageSize >= model.totalGroups)
+                Button { model.page += 1; Task { await model.loadGroups() } } label: { Image(systemName: "chevron.right") }.disabled((model.page + 1) * model.pageSize >= model.totalGroups || model.busy).help("Next group page").accessibilityLabel("Next group page")
             }.padding(12)
         }
         .searchable(text: $model.search, prompt: "Search name, username or Telegram ID")
@@ -68,10 +70,11 @@ struct GroupInspector: View {
     @ObservedObject var model: AppModel
     let group: TelegramGroup
     @State private var approve = false
+    @State private var localLabel = ""
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                HStack { Image(systemName: "person.3.fill").font(.title).foregroundStyle(.blue); Spacer(); Button { model.detail = nil } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary) }
+                HStack { Image(systemName: "person.3.fill").font(.title).foregroundStyle(.blue); Spacer(); Button { model.detail = nil } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary).help("Close group details").accessibilityLabel("Close group details") }
                 Text(group.name).font(.title2.weight(.semibold)).textSelection(.enabled)
                 PermissionBadge(state: group.permission)
                 Divider()
@@ -87,6 +90,9 @@ struct GroupInspector: View {
                 VStack(alignment: .leading, spacing: 8) { Text("Visible bots").font(.headline); Text(group.data["visible_bots"].array.map(\.string).joined(separator: ", ").isEmpty ? "Not available" : group.data["visible_bots"].array.map(\.string).joined(separator: ", ")).font(.callout).foregroundStyle(.secondary) }
                 VStack(alignment: .leading, spacing: 8) { Text("Unknown rules").font(.headline); ForEach(group.data["unknown_rules"].array.map(\.string), id: \.self) { Text(safeDisplay($0)).font(.callout).foregroundStyle(.secondary) } }
                 Button("Inspect Permissions") { model.inspect(group.id) }.disabled(model.busy || !model.connected).buttonStyle(.borderedProminent)
+                Text(model.localLabels.filter { $0["destination"].int == group.id }.map { safeDisplay($0["label"].string) }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                TextField("Local label", text: $localLabel).textFieldStyle(.roundedBorder)
+                HStack { Button("Apply Label") { model.setGroupLabel(group.id, label: localLabel, enabled: true) }; Button("Remove Label") { model.setGroupLabel(group.id, label: localLabel, enabled: false) } }.disabled(model.busy || localLabel.isEmpty)
                 Button("Copy Group ID") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(String(group.id), forType: .string) }
                 Button("Approve Destination…") { approve = true }.disabled(model.busy || !model.connected)
                 Text("Approval is separate from Telegram posting permissions. It does not send a message.").font(.caption).foregroundStyle(.secondary)

@@ -44,3 +44,32 @@ Progress: `{"event":"progress","request_id":"...","data":{"phase":"discovery|ins
 Authentication stages are `disconnected`, `credentials`, `phone`, `code`, `password`, `bind_account`, `connected`. Login uses the existing supported bounded migration retries, then sequentially reopens the same session with zero request retries before enabling delivery operations. Network/mutating operations serialize under one lock; cached reads and health/status remain available during discovery. The GUI must never automatically replay failed requests or sends.
 
 Compatibility aliases: `groups.list`, `groups.get`, `destinations.list`, `destinations.approve`, `destinations.revoke` (the last two accept only `destination`).
+
+## V2 account profiles and chat integration
+
+The existing envelope remains protocol version 1; methods and optional result fields are additive. All account-bound results add `profile_id` and `account_generation`. Progress data includes the same context. See [MULTI_ACCOUNT.md](MULTI_ACCOUNT.md) for filesystem isolation, legacy compatibility and safety semantics.
+
+- `accounts.list {include_archived?:bool}` → `profiles`, `active_profile_id`, `status`. Each profile includes `profile_id`/`id`, label, display_name, nullable verified `telegram_id`, `legacy`, `archived`, `is_active`, `session_present`, `auth_state`, `logout_confirmation`, `remove_confirmation`.
+- `accounts.add {label?:string,confirm:true}` → list/status plus `created_profile_id`; creates and activates an isolated profile **offline**.
+- `accounts.switch {profile_id:string,confirm:true}` → list/status; switches offline after serialized work finishes/cancels. Use `connect {}` explicitly to restore the selected session.
+- `accounts.disconnect {profile_id:string,confirm:true}` → list/status; selected active connection only, preserving server authorization and local files.
+- `accounts.logout {profile_id:string,confirmation:"LOG OUT <profile_id>"}` → list/status; selected active session only, with fresh identity verification before public `auth.LogOutRequest`. Preserves session files, Keychain and database; server authorization is revoked.
+- `accounts.archive {profile_id:string,confirm:true}`, `accounts.restore {profile_id:string,confirm:true}` → list/status; reversible local registry visibility. Existing retained Telegram IDs remain unique across archived profiles.
+- `accounts.remove {profile_id:string,confirmation:"REMOVE <profile_id>"}` → list/status; deletes only the selected non-legacy profile directory and its Keychain item, after closing/locking/validating that scope. Local ledger/drafts/approvals are deleted by this explicit operation. Original account removal is refused. This is not a server logout. Deleted data cannot be restored through `accounts.restore`.
+
+Local IDs are `legacy` or `profile_<32 random hex digits>`, never paths or phone numbers. Profile identifiers stay stable after Telegram verification. Unknown IDs, traversal-like values, duplicate Telegram identities, incorrect phrases, unsafe linked profile trees and foreign-owned registry files are rejected. The process caps active local profiles at 50. A registry record for removed data cannot be switched to, so no empty bound ledger is recreated.
+
+The backend now registers `ChatFeatures.METHODS` and `ChatFeatures.NETWORK` through the same strict router, serialization lock, cancellation, account-generation guard and framing. Chat APIs are listed below; implementations live in `chat_features.py`/`chat_store.py`. Account switches reconstruct the feature adapter against the new context and clear all chat/managed preview tokens. A same-body managed draft autosave preserves the matching token; editing that body invalidates managed tokens only. Managed sends require token kind `managed` as well as profile/generation/account/destination/message binding.
+
+
+### V2 chat requests
+
+- `chats.list {query?,kind?,page?,size?}` reads cached dialog summaries; kinds `all|private|saved|group|supergroup|channel`, pages zero-based, size 1–100.
+- `chats.refresh {limit?:1..100,after?:int}` explicitly retrieves a bounded dialog page; returns `processed`, `possibly_more`, `next_cursor`. Continue explicitly with `after:next_cursor`. This is separate from managed-group discovery.
+- `chats.saved {}` explicitly creates the active account's Saved Messages entry using verified identity; it sends nothing.
+- `messages.list {destination:int,limit?:1..100,offset_id?:int,search?:string}` retrieves a bounded page on explicit selection/action. Returns message IDs/text/senders/dates/direction/available media metadata, `next_offset_id`, `has_more`. Full message history is not written to SQLite or automatically subscribed/polled.
+- `media.download {destination:int,message_id:int,path:string}` explicitly downloads a known-size attachment of at most 64 MiB into a user-selected new file; uses a bounded temporary file and no-overwrite publication. No automatic attachment downloads or previews occur.
+- `chatdraft.get {destination}`, `chatdraft.save {destination,message}`, `chatdraft.delete {destination}`, `chatdraft.list {}` manage per-account/per-conversation private local drafts. Same-body autosave preserves matching personal preview tokens; edits invalidate the corresponding token.
+- `labels {}`, `label.set {destination,label,enabled}` manage local labels on discovered managed groups. Labels change no Telegram membership, permissions or administrator settings.
+- `chat.preview {account_id:int,destination:int,message:string,reply_to?:int}` prepares a one-use, expiring personal-chat/Saved Messages preview. It validates live account identity and a cached personal destination. Groups/channels are refused and must use managed approvals.
+- `chat.send {account_id:int,token:string,confirmation:"SEND <destination>"}` consumes that personal preview and revalidates identity/destination before the existing persistent delivery reservation. Optional reply IDs use public MTProto `InputReplyToMessage` rather than interpreting local UI list indices. Personal and managed preview tokens cannot cross send routes. No uncertain delivery is retried.

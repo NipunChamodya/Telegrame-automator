@@ -112,6 +112,21 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
                 await self.call('send', token=preview['token'], confirmation='SEND -1')
         service.send.assert_not_awaited()
 
+    async def test_identical_draft_autosave_keeps_matching_managed_preview_only(self):
+        service = NS(inspect=AsyncMock(return_value=self.group), send=AsyncMock(return_value='Sent'))
+        self.backend.service, self.backend.auth_stage = service, 'connected'
+        await self.call('approval.set', destination=-1, approved=True)
+        preview = await self.call('preview', destination=-1, message='unchanged body')
+        await self.call('draft.save', message='unchanged body')
+        self.assertIn(preview['token'], self.backend.preview_tokens)
+        self.backend.preview_tokens['personal'] = {'kind': 'personal', 'message': 'personal text'}
+        await self.call('draft.save', message='edited body')
+        self.assertNotIn(preview['token'], self.backend.preview_tokens)
+        self.assertIn('personal', self.backend.preview_tokens)
+        with self.assertRaises(IPCError):
+            await self.call('send', token='personal', confirmation='SEND -1')
+        service.send.assert_not_awaited()
+
     async def test_preview_denied_empty_and_utf16_limits(self):
         self.backend.service = NS(inspect=AsyncMock(return_value=self.group))
         self.backend.auth_stage = 'connected'

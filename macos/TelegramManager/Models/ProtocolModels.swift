@@ -104,3 +104,32 @@ func readBoundedUTF8File(_ url: URL) throws -> String {
     if let problem = ComposerValidation.error(text) { throw BackendFailure(code: "message_validation", message: problem) }
     return text
 }
+
+
+struct AccountProfile: Identifiable, Equatable, Sendable {
+    let data: JSONValue
+    var id: String { data["profile_id"].string.isEmpty ? data["id"].string : data["profile_id"].string }
+    var title: String { safeDisplay(data["display_name"].string.isEmpty ? data["label"].string : data["display_name"].string) }
+    var active: Bool { data["is_active"].bool }
+    var legacy: Bool { data["legacy"].bool }
+    var archived: Bool { data["archived"].bool }
+    var state: String { data["auth_state"].string }
+    var accountID: String { data["telegram_id"] == .null ? "Not authenticated" : data["telegram_id"].int.description }
+}
+
+struct ChatSummary: Identifiable, Equatable, Sendable {
+    let data: JSONValue
+    var id: Int { data["id"].int }
+    var title: String { safeDisplay(data["name"].string) }
+    var kind: String { data["kind"].string }
+    var lastMessage: String { safeDisplay(data["last_message"].string) }
+    var allowsPersonalSend: Bool { kind == "private" || kind == "saved" }
+}
+struct ChatMessage: Identifiable, Equatable, Sendable {
+    let data: JSONValue
+    var id: Int { data["id"].int }
+    var text: String { data["text"].string }
+    var sender: String { safeDisplay(data["sender_name"].string) }
+    var outgoing: Bool { data["outgoing"].bool }
+    var hasAttachment: Bool { data["media"] != .null && !data["media"].object.isEmpty }
+}

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telegram-group-manager"
-version = "0.2.0"
+version = "0.3.0"
 description = "Explicit, permission-aware personal Telegram group messaging"
 requires-python = ">=3.13"
 dependencies = ["Telethon>=1.45,<2"]

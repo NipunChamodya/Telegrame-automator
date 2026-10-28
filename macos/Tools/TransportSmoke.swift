@@ -16,6 +16,7 @@ actor Events {
         }
         let runtime = (URL(fileURLWithPath: CommandLine.arguments[1]), URL(fileURLWithPath: CommandLine.arguments[2]))
         let client = BackendClient(runtime: runtime)
+        try await client.start()
         let events = Events()
         await client.setEventHandler { _ in Task { await events.add() } }
         let unicode = "ශ්‍රී ලංකා தமிழ் 👩🏽‍💻 🇱🇰"
@@ -51,6 +52,7 @@ actor Events {
         } catch is CancellationError { }
         await client.shutdown()
         let broken = BackendClient(runtime: runtime)
+        try await broken.start()
         do {
             _ = try await broken.request("malformed", timeout: 3)
             throw BackendFailure(code: "test_failure", message: "Malformed frame accepted")
@@ -59,6 +61,7 @@ actor Events {
         }
         await broken.shutdown()
         let inputClosed = BackendClient(runtime: runtime)
+        try await inputClosed.start()
         _ = try await inputClosed.request("close_input", timeout: 3)
         try await Task.sleep(nanoseconds: 30_000_000)
         do {
@@ -69,6 +72,7 @@ actor Events {
         }
         await inputClosed.shutdown()
         let eof = BackendClient(runtime: runtime)
+        try await eof.start()
         do {
             _ = try await eof.request("close_output", timeout: 3)
             throw BackendFailure(code: "test_failure", message: "Missing EOF failure")

@@ -6,5 +6,5 @@ case "$TGM_CONFIGURATION" in Debug|Release) ;; *) echo 'Usage: scripts/build_mac
 xcodebuild -project "$TGM_PROJECT_ROOT/macos/TelegramManager.xcodeproj" \
   -scheme TelegramManager -configuration "$TGM_CONFIGURATION" \
   -destination 'platform=macOS,arch=arm64' -derivedDataPath "$TGM_PROJECT_ROOT/macos/build" \
-  -jobs 2 CODE_SIGNING_ALLOWED=NO CLANG_MODULE_CACHE_PATH="${TMPDIR:-/private/tmp}/tgm-clang-module-cache" build
+  -jobs 2 CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= CLANG_MODULE_CACHE_PATH="${TMPDIR:-/private/tmp}/tgm-clang-module-cache" build
 printf '\nBuilt: %s\n' "$TGM_PROJECT_ROOT/macos/build/Build/Products/$TGM_CONFIGURATION/TelegramManager.app"

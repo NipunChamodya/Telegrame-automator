@@ -26,8 +26,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
-from telethon import TelegramClient, errors
+from telethon import TelegramClient, errors, functions
 
+from .accounts import AccountRegistry, LEGACY, ProfileError
+from .chat_features import ChatFeatures
+from . import __version__
 from .cache import CachePolicy
 from .configuration import (
     Credentials, bind_account, data_directory, keychain_service,
@@ -38,9 +41,10 @@ from .security import ApplicationBusy, KeychainError, MacKeychain, application_l
 from .setup_wizard import AUTH_CONNECTION_RETRIES, AUTH_REQUEST_RETRIES, normalize_phone
 from .storage import DuplicateMessage, Store
 from .telegram import TelegramService
+from .parent_lifecycle import wait_for_parent_exit
 from .terminal import clean_text
 
-VERSION = '0.2.0'
+VERSION = __version__
 MAX_FRAME = 1024 * 1024
 MAX_REQUESTS = 64
 LOG = logging.getLogger('telegram_manager.ipc')
@@ -117,14 +121,21 @@ class Backend:
     """Backend state, usable directly in tests without opening user data."""
     NETWORK = {'connect', 'auth.credentials', 'auth.phone', 'auth.code', 'auth.password', 'auth.bind',
                'discover', 'inspect', 'inspect_pending', 'preview', 'send',
-               'draft.save', 'approval.set', 'storage.backup', 'diagnostics.export', 'settings.update'}
+               'draft.save', 'approval.set', 'storage.backup', 'diagnostics.export', 'settings.update',
+               'accounts.add', 'accounts.switch', 'accounts.disconnect', 'accounts.logout',
+               'accounts.remove', 'accounts.archive', 'accounts.restore'} | ChatFeatures.NETWORK
     METHODS = NETWORK | {'health', 'status', 'settings', 'groups', 'detail', 'draft.get',
-                         'approvals', 'history', 'cancel', 'shutdown'}
+                         'approvals', 'history', 'cancel', 'shutdown', 'accounts.list'} | ChatFeatures.METHODS
     ALIASES = {'groups.list': 'groups', 'groups.get': 'detail', 'destinations.list': 'approvals'}
 
     def __init__(self, root: Path, store: Store, config: dict, *, client_factory=TelegramClient,
-                 emitter: Callable[[dict], None] | None = None):
+                 emitter: Callable[[dict], None] | None = None,
+                 registry: AccountRegistry | None = None, profile_id: str = LEGACY, profile_lock=None):
         self.root, self.store, self.config = root, store, config
+        self.registry = registry or AccountRegistry(root, config)
+        self.profile_id = profile_id
+        self.account_generation = 0
+        self._profile_lock = profile_lock
         self.client_factory = client_factory
         self.emit = emitter or (lambda event: None)
         self.policy = CachePolicy.from_environment()
@@ -149,6 +160,7 @@ class Backend:
         self.preview_tokens: dict[str, dict] = {}
         self.lock = asyncio.Lock()
         self.closing = False
+        self.chats = ChatFeatures(self)
 
     @staticmethod
     def _validate_preferences(p: dict) -> None:
@@ -181,6 +193,140 @@ class Backend:
         if self.service is not None:
             self.service.policy = self.policy
 
+    def scope(self) -> dict:
+        return {'profile_id': self.profile_id, 'account_generation': self.account_generation}
+
+    def release_profile_lock(self) -> None:
+        if self._profile_lock is not None:
+            self._profile_lock.__exit__(None, None, None)
+            self._profile_lock = None
+
+    async def _disconnect_profile(self) -> None:
+        self.preview_tokens.clear()
+        self.service = None
+        self.auth_stage = 'disconnected'
+        self.phone = self.phone_code_hash = None
+        self.credentials = None
+        self.credential_source = 'not loaded'
+        self.me = None
+        client, self.client = self.client, None
+        if client is not None:
+            try:
+                await client.disconnect()
+            except OSError:
+                self.client = client  # Retain it for explicit reconnect/shutdown cleanup.
+                raise IPCError('disconnect_failed', 'The old connection could not finish disconnecting. Relaunch before switching; local data was preserved.') from None
+            except BaseException:
+                self.client = client
+                raise
+
+    async def _activate_profile(self, identity: str) -> None:
+        profile = self.registry.profile(identity)
+        if identity == self.profile_id:
+            return
+        root = self.registry.root_for(identity)
+        if identity != LEGACY and not root.is_dir():
+            raise IPCError('profile_missing', 'This profile directory is missing. Restore its backup; its data was not reset.')
+        if profile.get('telegram_id') is not None and not (root / 'manager.sqlite3').is_file():
+            raise IPCError('database_missing', 'This bound profile database is missing. Restore its backup; an empty delivery ledger was not created.')
+        root = private_directory(root)
+        lock = application_lock(root) if identity != LEGACY else None
+        store = None
+        try:
+            if lock is not None:
+                lock.__enter__()
+            config = load_configuration(root)
+            store = Store(root / 'manager.sqlite3')
+            # Validate preferences before discarding the old active context.
+            candidate = Backend(root, store, config, client_factory=self.client_factory,
+                                emitter=self.emit, registry=self.registry, profile_id=identity)
+            await self._disconnect_profile()
+            self.registry.activate(identity)
+        except BaseException:
+            if store is not None:
+                store.close()
+            if lock is not None:
+                lock.__exit__(None, None, None)
+            raise
+        previous = self.store
+        self.release_profile_lock()
+        self.root, self.store, self.config = root, store, config
+        self.policy, self.inspection_limit = candidate.policy, candidate.inspection_limit
+        self.profile_id, self._profile_lock = identity, lock
+        self.account_generation += 1
+        self.chats = ChatFeatures(self)
+        previous.close()
+
+    def account_list(self, *, include_archived: bool = False) -> dict:
+        return {'profiles': self.registry.list(include_archived=include_archived),
+                'active_profile_id': self.profile_id, 'status': self.status(), **self.scope()}
+
+    async def _account_dispatch(self, method: str, p: dict) -> dict:
+        if method == 'accounts.list':
+            fields(p, {'include_archived'})
+            return self.account_list(include_archived=boolean(p, 'include_archived'))
+        if method == 'accounts.add':
+            fields(p, {'label', 'confirm'}, {'confirm'})
+            if not boolean(p, 'confirm'):
+                raise IPCError('confirmation_required', 'Explicitly confirm adding a new local account profile.')
+            identity = self.registry.create(string(p, 'label', 'New account', maximum=80))
+            await self._activate_profile(identity)
+            return self.account_list() | {'created_profile_id': identity}
+        allowed = {'profile_id', 'confirmation'} if method in {'accounts.logout', 'accounts.remove'} else {'profile_id', 'confirm'}
+        fields(p, allowed, allowed)
+        identity = string(p, 'profile_id', maximum=64)
+        self.registry.profile(identity, allow_archived=method in {'accounts.remove', 'accounts.restore'})
+        if method in {'accounts.logout', 'accounts.remove'}:
+            phrase = ('LOG OUT ' if method == 'accounts.logout' else 'REMOVE ') + identity
+            if string(p, 'confirmation', maximum=128) != phrase:
+                raise IPCError('confirmation_required', 'Enter the exact confirmation phrase shown for this selected account profile.')
+        elif not boolean(p, 'confirm'):
+            raise IPCError('confirmation_required', 'Explicitly confirm this account operation.')
+        if method == 'accounts.switch':
+            await self._activate_profile(identity)
+        elif method == 'accounts.disconnect':
+            if identity != self.profile_id:
+                raise IPCError('account_changed', 'Select the active profile before disconnecting it.')
+            await self._disconnect_profile()
+            self.account_generation += 1
+            self.registry.update(identity, session_state='disconnected')
+        elif method == 'accounts.logout':
+            if identity != self.profile_id or self.client is None or not self.client.is_connected():
+                raise IPCError('not_connected', 'Connect the selected account before explicitly logging it out.')
+            expected = self.config.get('account_id') or (self.me.id if self.me is not None else None)
+            verified = await self.client.get_me()
+            if expected is None or verified is None or verified.id != expected:
+                self.service = None
+                self.auth_stage = 'disconnected'
+                self.preview_tokens.clear()
+                raise IPCError('account_changed', 'The live Telegram identity does not match this selected profile. Logout was not sent.')
+            # The public MTProto method revokes the server authorization. Unlike
+            # TelegramClient.log_out(), it does not delete the local session file.
+            try:
+                await self.client(functions.auth.LogOutRequest())
+            except BaseException:
+                with contextlib.suppress(ProfileError, OSError):
+                    self.registry.update(identity, session_state='logout_unknown')
+                raise
+            finally:
+                await self._disconnect_profile()
+                self.account_generation += 1
+            self.registry.update(identity, session_state='logged_out')
+        elif method in {'accounts.remove', 'accounts.archive'}:
+            if identity == LEGACY:
+                raise IPCError('legacy_protected', 'The original account profile cannot be removed or archived. Disconnect it instead; original files were preserved.')
+            if identity == self.profile_id:
+                await self._activate_profile(LEGACY)
+            if method == 'accounts.archive':
+                self.registry.update(identity, archived=True)
+            else:
+                target = self.registry.root_for(identity, allow_archived=True)
+                with application_lock(target):
+                    await asyncio.to_thread(self.registry.remove_files, identity)
+        elif method == 'accounts.restore':
+            self.registry.update(identity, archived=False)
+        return self.account_list(include_archived=True)
+
     def account(self) -> int:
         account = self.config.get('account_id')
         if type(account) is not int:
@@ -212,12 +358,12 @@ class Backend:
                 'overview': self.store.overview(account, self.policy) if account is not None else empty,
                 'scan': self.store.scan(account) if account is not None else {},
                 'cooldown_until': until, 'remaining_seconds': max(0, math.ceil(until - time.time())),
-                'session_present': (self.root / 'account.session').is_file()}
+                'session_present': (self.root / 'account.session').is_file(), **self.scope()}
 
     def progress(self, request_id: str, phase: str):
         def callback(index, group, skipped=False):
             self.emit({'event': 'progress', 'request_id': request_id,
-                       'data': {'phase': phase, 'index': index, 'skipped': skipped,
+                       'data': {**self.scope(), 'phase': phase, 'index': index, 'skipped': skipped,
                                 'group': safe_group(group.data(), self.policy)}})
         return callback
 
@@ -241,6 +387,10 @@ class Backend:
         expected = self.config.get('account_id')
         if expected is not None and expected != me.id:
             raise IPCError('account_mismatch', 'This session does not match the bound account. Existing data was preserved.')
+        try:
+            self.registry.identity_available(self.profile_id, me.id)
+        except ProfileError as exc:
+            raise IPCError('duplicate_account', str(exc)) from None
         self.me = me
         self.phone = self.phone_code_hash = None
         if expected is None:
@@ -259,6 +409,8 @@ class Backend:
         self.service = TelegramService(self.client, self.store, restored)
         self.service.policy = self.policy
         self.auth_stage = 'connected'
+        name = ' '.join(v for v in (getattr(restored, 'first_name', None), getattr(restored, 'last_name', None)) if v)
+        self.registry.verify(self.profile_id, restored.id, name)
         return self.status()
 
     async def connect(self) -> dict:
@@ -288,7 +440,7 @@ class Backend:
         if self.client is None or self.auth_stage != stage:
             raise IPCError('auth_state', 'This authentication step is not currently required. Reconnect if necessary.')
 
-    async def dispatch(self, request_id: str, method: str, params: dict) -> dict:
+    async def dispatch(self, request_id: str, method: str, params: dict, *, expected_generation: int | None = None) -> dict:
         method = self.ALIASES.get(method, method)
         if method in {'destinations.approve', 'destinations.revoke'}:
             fields(params, {'destination'}, {'destination'})
@@ -296,12 +448,26 @@ class Backend:
             method = 'approval.set'
         if method not in self.METHODS:
             raise IPCError('unknown_method', 'This operation is not supported.')
-        if method in self.NETWORK:
-            async with self.lock:
-                return await self._dispatch(request_id, method, params)
-        return await self._dispatch(request_id, method, params)
+        generation = self.account_generation if expected_generation is None else expected_generation
+        try:
+            if method in self.NETWORK:
+                async with self.lock:
+                    if generation != self.account_generation:
+                        raise IPCError('account_changed', 'The active account changed while this request was queued. Review the selection and request again.')
+                    result = await self._dispatch(request_id, method, params)
+                    return result | self.scope()
+            if method not in {'health', 'status', 'settings', 'accounts.list'} and generation != self.account_generation:
+                raise IPCError('account_changed', 'The active account changed before this cached request ran.')
+            result = await self._dispatch(request_id, method, params)
+            return result | self.scope()
+        except ProfileError as exc:
+            raise IPCError('profile', str(exc)) from None
 
     async def _dispatch(self, request_id: str, method: str, p: dict) -> dict:
+        if method in ChatFeatures.METHODS:
+            return await self.chats.dispatch(request_id, method, p)
+        if method.startswith('accounts.'):
+            return await self._account_dispatch(method, p)
         if method in {'health', 'status', 'settings', 'connect', 'draft.get', 'shutdown'}:
             fields(p, set())
         if method == 'health':
@@ -374,6 +540,10 @@ class Backend:
             account = integer(p, 'account_id', minimum=1)
             if self.auth_stage != 'bind_account' or self.me is None or self.me.id != account or not boolean(p, 'confirm'):
                 raise IPCError('confirmation_required', 'Explicitly confirm the verified account ID before binding.')
+            try:
+                self.registry.identity_available(self.profile_id, account)
+            except ProfileError as exc:
+                raise IPCError('duplicate_account', str(exc)) from None
             bind_account(self.root, self.config, account)
             return await self._authorized()
         if method == 'groups':
@@ -424,7 +594,8 @@ class Backend:
             if len(message.encode('utf-16-le')) // 2 > 4096:
                 raise IPCError('invalid_message', 'Draft exceeds 4096 UTF-16 units.')
             self.store.save_draft(self.account(), message)
-            self.preview_tokens.clear()
+            self.preview_tokens = {token: preview for token, preview in self.preview_tokens.items()
+                                   if preview.get('kind', 'managed') != 'managed' or preview.get('message') == message}
             return self.store.draft(self.account())
         if method == 'approvals':
             fields(p, {'query'})
@@ -445,8 +616,8 @@ class Backend:
                 raise IPCError('slow_mode', 'Telegram slow mode is active. Wait before preparing the message.')
             self.preview_tokens.clear()
             token, deadline = secrets.token_urlsafe(32), time.time() + 120
-            self.preview_tokens[token] = {'account': account, 'destination': destination,
-                'message': message, 'digest': hashlib.sha256(message.encode()).hexdigest(), 'deadline': deadline}
+            self.preview_tokens[token] = {'kind': 'managed', 'account': account, 'destination': destination,
+                'message': message, 'digest': hashlib.sha256(message.encode()).hexdigest(), 'deadline': deadline, **self.scope()}
             return {'token': token, 'expires_at': deadline, 'destination': destination,
                     'message': message, 'group': safe_group(group.data(), self.policy),
                     'confirmation': f'SEND {destination}', 'utf16_units': units}
@@ -454,7 +625,8 @@ class Backend:
             fields(p, {'token', 'confirmation'}, {'token', 'confirmation'})
             token = string(p, 'token', maximum=128)
             preview = self.preview_tokens.pop(token, None)  # One use, including failed confirmation.
-            if preview is None or preview['deadline'] < time.time() or preview['account'] != self.account():
+            if (preview is None or preview.get('kind') != 'managed' or preview['deadline'] <= time.time() or preview['account'] != self.account()
+                    or preview.get('profile_id') != self.profile_id or preview.get('account_generation') != self.account_generation):
                 raise IPCError('preview_expired', 'Preview expired or was consumed. Prepare and confirm a new preview.')
             destination = preview['destination']
             if string(p, 'confirmation', maximum=64) != f'SEND {destination}':
@@ -494,11 +666,16 @@ class Backend:
         self.preview_tokens.clear()
         self.phone = self.phone_code_hash = None
         self.credentials = None
-        if self.client is not None:
-            await self.client.disconnect()
+        try:
+            if self.client is not None:
+                await asyncio.wait_for(self.client.disconnect(), timeout=5)
+        except (OSError, TimeoutError) as exc:
+            LOG.info('BackendDisconnect:%s', type(exc).__name__)
+        finally:
             self.client = None
-        self.service = None
-        self.auth_stage = 'disconnected'
+            self.service = None
+            self.auth_stage = 'disconnected'
+            self.release_profile_lock()
 
 
 class ProtocolServer:
@@ -512,6 +689,8 @@ class ProtocolServer:
         self.output_available = True
 
     def progress(self, event: dict) -> None:
+        if isinstance(event.get('data'), dict):
+            event = event | {'data': self.backend.scope() | event['data']}
         # Progress is replaceable; bounded queue drops intermediate events under
         # slow-reader backpressure. Final responses and committed counts are not dropped.
         try:
@@ -541,9 +720,9 @@ class ProtocolServer:
             self.output_available = False
             raise
 
-    async def handle(self, request_id: str, method: str, params: dict) -> None:
+    async def handle(self, request_id: str, method: str, params: dict, *, expected_generation: int | None = None) -> None:
         try:
-            result = await self.backend.dispatch(request_id, method, params)
+            result = await self.backend.dispatch(request_id, method, params, expected_generation=expected_generation)
             await self.output({'id': request_id, 'ok': True, 'result': result})
         except asyncio.CancelledError:
             if not self.stopping and self.output_available:
@@ -579,7 +758,7 @@ class ProtocolServer:
             await self.error(request_id, 'validation', 'Input is invalid or the requested operation is currently blocked. Check the selected fields and cooldown.')
         except OSError:
             if method in {'connect', 'auth.credentials', 'auth.phone', 'auth.code', 'auth.password',
-                          'auth.bind', 'discover', 'inspect', 'inspect_pending', 'preview', 'send'}:
+                          'auth.bind', 'discover', 'inspect', 'inspect_pending', 'preview', 'send'} | ChatFeatures.NETWORK:
                 self.backend.service = None
                 self.backend.auth_stage = 'disconnected'
                 self.backend.preview_tokens.clear()
@@ -644,15 +823,19 @@ class ProtocolServer:
         if len(self.tasks) >= MAX_REQUESTS:
             await self.error(request_id, 'busy', 'Too many operations are queued. Wait or cancel a pending operation.')
             return
-        self.tasks[request_id] = asyncio.create_task(self.handle(request_id, method, params))
+        self.tasks[request_id] = asyncio.create_task(self.handle(request_id, method, params, expected_generation=self.backend.account_generation))
 
-    async def serve(self, reader: asyncio.StreamReader) -> None:
+    async def serve(self, reader: asyncio.StreamReader, *, parent_pid: int | None = None) -> None:
+        parent = asyncio.create_task(wait_for_parent_exit(parent_pid)) if parent_pid is not None else None
         pump = asyncio.create_task(self.pump())
         read_task = None
         try:
             while not self.stopping:
                 read_task = asyncio.create_task(reader.readline())
-                done, _ = await asyncio.wait({read_task, pump}, return_when=asyncio.FIRST_COMPLETED)
+                done, _ = await asyncio.wait({read_task, pump} | ({parent} if parent else set()), return_when=asyncio.FIRST_COMPLETED)
+                if parent is not None and parent in done:
+                    LOG.info('BackendParentExited')
+                    break
                 if pump in done:
                     # Closed GUI stdout: stop requests, cancel work, preserve state.
                     await pump
@@ -686,6 +869,10 @@ class ProtocolServer:
         except (BrokenPipeError, ConnectionError):
             LOG.info('ProtocolPipeClosed')
         finally:
+            if parent is not None:
+                parent.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await parent
             if read_task and not read_task.done():
                 read_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -716,14 +903,28 @@ class ProtocolServer:
 
 async def run() -> None:
     os.umask(0o077)
-    root = private_directory(data_directory())
-    with application_lock(root):
-        config = load_configuration(root)
-        if config.get('account_id') is not None and not (root / 'manager.sqlite3').is_file():
-            raise IPCError('database_missing', 'The bound installation database is missing. Restore its backup; no empty ledger was created.')
-        store = Store(root / 'manager.sqlite3')
+    parent_pid = os.getppid()
+    registry_root = private_directory(data_directory())
+    with application_lock(registry_root):
+        registry = AccountRegistry(registry_root, load_configuration(registry_root))
+        identity = registry.active
+        root = registry.root_for(identity)
+        if identity != LEGACY and not root.is_dir():
+            raise IPCError('profile_missing', 'The active profile directory is missing. Restore its backup; no empty profile was created.')
+        root = private_directory(root)
+        profile_lock = application_lock(root) if identity != LEGACY else None
+        store = None
+        backend = None
+        profile_lock_entered = False
         try:
-            backend = Backend(root, store, config)
+            if profile_lock is not None:
+                profile_lock.__enter__()
+                profile_lock_entered = True
+            config = load_configuration(root)
+            if config.get('account_id') is not None and not (root / 'manager.sqlite3').is_file():
+                raise IPCError('database_missing', 'The bound installation database is missing. Restore its backup; no empty ledger was created.')
+            store = Store(root / 'manager.sqlite3')
+            backend = Backend(root, store, config, registry=registry, profile_id=identity, profile_lock=profile_lock)
             loop = asyncio.get_running_loop()
             reader = asyncio.StreamReader(limit=MAX_FRAME)
             transport, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin.buffer)
@@ -745,11 +946,17 @@ async def run() -> None:
                         finally:
                             loop.remove_writer(output_fd)
             try:
-                await ProtocolServer(backend, writer).serve(reader)
+                await ProtocolServer(backend, writer).serve(reader, parent_pid=parent_pid)
             finally:
                 transport.close()
         finally:
-            store.close()
+            if backend is not None:
+                backend.store.close()
+                backend.release_profile_lock()
+            elif store is not None:
+                store.close()
+            if backend is None and profile_lock_entered:
+                profile_lock.__exit__(None, None, None)
 
 
 def main() -> None:
@@ -764,6 +971,8 @@ def main() -> None:
         # Startup errors have no request ID; stdout remains a framed error only.
         message = exc.message if isinstance(exc, IPCError) else 'Backend startup failed. Check private storage access and configuration.'
         code = exc.code if isinstance(exc, IPCError) else 'startup'
+        if isinstance(exc, ProfileError):
+            code, message = 'profiles_invalid', str(exc)
         if isinstance(exc, ApplicationBusy):
             code = 'already_running'
             message = 'Another CLI or desktop backend is using this installation. Quit that instance, then reconnect. Its session was not changed.'
