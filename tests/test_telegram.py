@@ -9,6 +9,7 @@ if importlib.util.find_spec("telethon") is None:
     raise unittest.SkipTest("Telethon dependency not installed")
 
 from telethon import errors, types
+from telethon.tl.custom import ParticipantPermissions
 from telegram_manager.telegram import TelegramService, analyze
 
 from telegram_manager.models import Group
@@ -21,8 +22,8 @@ def chat(**kwargs):
 
 
 def permissions(**kwargs):
-    return NS(**({'is_admin': False, 'is_creator': False, 'send_messages': True,
-                  'participant': None} | kwargs))
+    participant_type = types.ChatParticipantAdmin if kwargs.get('is_admin') else types.ChatParticipant
+    return ParticipantPermissions(participant_type(user_id=1, inviter_id=2, date=None), chat=True)
 
 
 class PermissionTests(unittest.TestCase):

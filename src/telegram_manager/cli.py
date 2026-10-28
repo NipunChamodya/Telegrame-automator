@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -15,7 +16,8 @@ from .security import private_directory
 from .error_messages import telegram_error_message
 from .setup_wizard import AUTH_CONNECTION_RETRIES, AUTH_REQUEST_RETRIES, authenticate
 from .storage import Store
-from .telegram import TelegramService
+from .telegram import TelegramService, discover_with_output
+from .diagnostics import report_programming_error
 
 LOG = logging.getLogger("telegram_manager")
 
@@ -97,7 +99,7 @@ async def run(args: argparse.Namespace) -> None:
         if args.command in {"discover", "inspect", "send"} and store.cooldown(me.id) > time.time():
             raise ValueError("Account cooldown is active; wait before further Telegram operations.")
         if args.command == "discover":
-            print(f"Refreshed {await service.discover()} groups.")
+            await discover_with_output(service)
         elif args.command == "groups":
             for group in store.groups(me.id, args.search):
                 print(json.dumps(group, ensure_ascii=True))
@@ -146,13 +148,19 @@ def main() -> None:
         LOG.error(type(exc).__name__)
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
+    except sqlite3.Error as exc:
+        LOG.error(type(exc).__name__)
+        print("Database operation failed. Check disk space, permissions and backups; records were not reset.",
+              file=sys.stderr)
+        raise SystemExit(1) from None
     except errors.RPCError as exc:
         LOG.error(type(exc).__name__)
         print(telegram_error_message(exc), file=sys.stderr)
         raise SystemExit(1) from None
     except Exception as exc:
-        LOG.error(type(exc).__name__)
-        print(f"Operation failed: {type(exc).__name__}. Check delivery history before retrying.",
+        report_programming_error(LOG, exc)
+        print("A programming error stopped this operation. Set TGM_DEV_MODE=1 for sanitized file/line "
+              "diagnostics. Check history before attempting another delivery.",
               file=sys.stderr)
         raise SystemExit(1) from None
     except KeyboardInterrupt:

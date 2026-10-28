@@ -1,5 +1,6 @@
 """Small terminal dashboard. Drafts and destination selection live only in memory."""
 import json
+import logging
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
@@ -9,6 +10,8 @@ from telethon import errors
 
 from .cli import compose
 from .error_messages import telegram_error_message
+from .diagnostics import report_programming_error
+from .telegram import discover_with_output
 from .guidance import show_help
 from .setup_wizard import authenticate, yes
 
@@ -30,10 +33,7 @@ class Dashboard:
 
     async def refresh(self) -> None:
         self.require_ready()
-        def progress(count: int) -> None:
-            print(f"Inspected {count} groups…", flush=True)
-        count = await self.service.discover(progress=progress)
-        print(f"Saved {count} group snapshots.")
+        await discover_with_output(self.service)
 
     async def offer_refresh(self, *, first_run: bool = False) -> None:
         groups = self.service.store.groups(self.service.me.id)
@@ -159,7 +159,11 @@ class Dashboard:
         except ValueError as exc:
             print(str(exc))
         except OSError as exc:
-            print(f"Operation failed ({type(exc).__name__}); check network/file access. No automatic retry.")
+            print(f"Connection or file access failed ({type(exc).__name__}). Saved discovery records were retained; no retry attempted.")
+        except Exception as exc:
+            report_programming_error(logging.getLogger("telegram_manager.dashboard"), exc)
+            print("A programming error interrupted this operation. Set TGM_DEV_MODE=1 for sanitized "
+                  "file/line diagnostics. Saved records were retained.")
 
     async def run(self, *, first_run: bool = False) -> None:
         await self.offer_refresh(first_run=first_run)

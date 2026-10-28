@@ -23,6 +23,7 @@ class Group:
         "Human rules, bot enforcement and account-wide spam limits cannot be fully determined."
     ])
     checked_at: str = field(default_factory=now)
+    metadata_status: Literal["complete", "partial", "unavailable", "error"] = "unavailable"
 
     def data(self) -> dict:
         return asdict(self)

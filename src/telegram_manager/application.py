@@ -11,6 +11,7 @@ from telethon import TelegramClient, errors
 from .cli import JsonFormatter
 from .configuration import bind_account, data_directory, load_configuration
 from .dashboard import Dashboard
+from .diagnostics import report_programming_error
 from .error_messages import telegram_error_message
 from .guidance import setup_completed, welcome
 from .security import application_lock, private_directory
@@ -95,13 +96,17 @@ async def startup() -> None:
 def main() -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
-    LOG.addHandler(handler)
+    base_log = logging.getLogger("telegram_manager")
+    base_log.handlers.clear()
+    base_log.addHandler(handler)
+    base_log.setLevel(logging.INFO)
+    base_log.propagate = False
+    LOG.handlers.clear()
     LOG.setLevel(logging.INFO)
     auth_log = logging.getLogger("telegram_manager.authentication")
     auth_log.handlers.clear()
-    auth_log.addHandler(handler)
     auth_log.setLevel(logging.INFO)
-    auth_log.propagate = False
+    auth_log.propagate = True
     logging.getLogger("telethon").setLevel(logging.CRITICAL)
     try:
         asyncio.run(startup())
@@ -138,7 +143,7 @@ def main() -> None:
               "disk space and private directory access, then relaunch. Existing data was not reset.", file=sys.stderr)
         raise SystemExit(1) from None
     except Exception as exc:
-        LOG.error(type(exc).__name__)
-        print(f"Startup/operation failed ({type(exc).__name__}). Check network, file permissions and "
-              "Keychain access, then relaunch. No application data was reset.", file=sys.stderr)
+        report_programming_error(LOG, exc)
+        print("An unexpected programming error stopped this operation. Set TGM_DEV_MODE=1 to see "
+              "sanitized file/line diagnostics. Existing data was not reset.", file=sys.stderr)
         raise SystemExit(1) from None
