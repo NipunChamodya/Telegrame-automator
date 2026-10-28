@@ -1,5 +1,7 @@
 # Telegram Manager V2 — implementation and validation report
 
+Latest responsive repair: **216 Python tests + 59 subtests, 44 native tests passed**. Graphical assertions/screenshots remain blocked; see the latest section below.
+
 Version 0.3.0 development preview, validated 2026-10-28 on macOS 26.6.2 arm64, Python 3.13.4, Telethon 1.45.0, Xcode 27.1 and Swift 6.4. The previous 0.2 baseline was 172 Python tests/54 subtests and 17 Swift tests; current results below supersede those counts.
 
 **This is not a production-readiness claim.** Real graphical launch and screenshots remain blocked in the managed execution context. No live Telegram authentication, discovery, sending, logout or native Keychain modification was performed. Existing personal sessions, database records and credentials were not reset or migrated.
@@ -41,11 +43,11 @@ Earlier CLI selection, direct-text/file ambiguity, Unicode spacing, permission c
 
 | Gate | Status and evidence |
 | --- | --- |
-| Full Python suite | **PASSED: 216 tests, 59 subtests**, 4.31 seconds; zero failures |
+| Full Python suite | **PASSED: 216 tests, 59 subtests**, 4.50 seconds; zero failures |
 | Python syntax | **PASSED:** `compileall` for main/src/tests/scripts |
 | Whitespace | **PASSED:** `git diff --check` |
 | IPC/account/auth/Unicode/security regressions | **PASSED:** included in the full Python suite, using mocks and real offline subprocesses |
-| Native unit/integration suite | **PASSED: 34 XCTest tests**, zero failures; latest rerun completed in 7.682 seconds |
+| Native unit/integration suite | **PASSED: 44 XCTest tests**, zero failures; latest responsive-layout rerun completed in 7.813 seconds |
 | Native UI-test target compilation | **PASSED:** expanded 20-state screenshot workflow builds |
 | Actual XCUITest execution | **BLOCKED:** testmanagerd/control lookup error 159; no graphical assertions reported as passed |
 | Debug / Release builds | **PASSED:** real arm64 `.app` bundles produced with ad-hoc signatures |
@@ -155,3 +157,36 @@ Manual acceptance still required: normal GUI-to-backend connection on the user's
 Principal stability files modified: native `BackendClient.swift`, `TelegramManagerApp.swift`, `AppModel.swift`, Root/Composer/Groups/Workspace views, native tests, UI tests, transport smoke tool, Python `ipc.py`, and required documentation. Added `parent_lifecycle.py`, `test_backend_lifecycle.py`, `ParentDeathProbe.swift`, and `BACKEND_LIFECYCLE.md`. Current test counts above supersede the V2 baseline; final Debug/Release build and signature audits are recorded after source freeze.
 
 Final stability artifacts: Debug and Release builds both succeeded after source freeze; both strict deep signature checks passed. Both bundles contain the current Python source snapshot and zero private-artifact filename candidates. Final native test run: 34 passed, zero failures (7.682 seconds); final Python run: 216 passed, 59 subtests (4.31 seconds). Documentation and shell syntax checks passed. No graphical or live-Telegram claim is inferred from these results.
+
+
+## Responsive UI repair — latest validation
+
+Latest results supersede earlier counts: **216 Python tests and 59 subtests passed** (4.50 seconds); **44 native XCTest tests passed** (7.813 seconds). Ten added native tests cover typed Activity chronology/bounds/filtering/privacy/progress and real offline IPC conversation pagination/filtering/stale-search rejection/search continuation/deduplication. No Python backend, session storage, Keychain, SQLite schema or security workflow was changed in this UI repair.
+
+### Diagnosed layout causes and implementation
+
+The previous Chats HSplitView wrapped width-constrained child VStacks without an explicit full-height column contract. A search field, full Picker and several action rows sat above the List; pagination followed the unconstrained list as ordinary stack content. The detail also imposed a 420-point minimum while the conversation column needed 250–380 points, in addition to the 220–260 point navigation sidebar. That left no narrow-window fallback. Source inspection establishes these constraint problems; the exact clipped screenshot geometry was not reproduced visually here.
+
+The repaired ChatsView uses a finite GeometryReader proposal. At 800 or more content points it allocates a 300–360 point conversation column and the remaining width to detail. Below that it shows list or conversation with Back navigation, preserving the selected conversation/draft. Native List selection provides keyboard/selected state, stable IDs, placeholders/unread/date previews and independent full-height scrolling. Header controls are compact menus, and the footer is separate from the expanding list. The detail history gets remaining height; composer/preview scroll bounds prevent overlap. It does not use a hardcoded list height.
+
+Cached search now debounces by 250 ms and guards account/query/type/page/request revision. A stale result cannot replace a newer selection. Re-selecting the current conversation does not clear its draft or refetch history. History continuation retains explicit search, deduplicates message IDs and remains capped at 200 loaded rows. Cached conversation pages are 50 rows; remote dialog/history operations remain explicit and bounded.
+
+Activity uses typed, bounded (100) in-memory events with fixed safe titles/descriptions, account context, timestamps, status, optional actual processed counts and expandable details. It is explicitly session-only; it is not a persisted audit log. Errors, credentials and message bodies have no event payload field. Delivery activity reflects actual ledger outcomes: blocked/uncertain results are warnings, not successful deliveries. Failed/cancelled operations retain their status. Search/type/status filters are local.
+
+History and Destinations now use shared PageHeader/EmptyStateView/StatusBadge/SectionCard components and top-leading full-height page constraints. Their previous intrinsic-height VStacks could be centered inside the root’s expanding detail; action buttons were separate siblings of empty-state content. Empty actions are now grouped inside the centered empty state. History displays actual account/destination/time/status/preview and selected-record details, with local search/status/sort over the latest 100 loaded records. No ledger record is created, deleted or retried by presentation controls.
+
+The sidebar is grouped by purpose, and a larger account identity menu separates navigation from lifecycle actions. Logout/removal continue through the existing typed confirmation controls. The shared system uses native typography, semantic colors, labels plus symbols and platform controls; it does not add a GUI framework/dependency.
+
+### Actual graphical attempts and limitations
+
+The final real XCUITest attempt built the expanded target then failed before assertions: testmanagerd/control lookup **159**, sandbox restriction, xcodebuild exit **133**. Evidence: `macos/build/UI-light-20261028-190305.xcresult`; log `/private/tmp/tgm-responsive-ui-final.log`. A direct launch of the isolated DEBUG Chats fixture also exited **-6**, with **zero own windows** found. No private user desktop was captured. No screenshots or recordings were produced/inspected; no geometry, centering, readability, scroll, dark-mode or visual-perfection claim is made from compilation.
+
+Executable tests now prepare the required 16 populated/empty presentation screenshots, chat-list height/footer/selection/search/pagination checks and history filters, in addition to existing navigation/authentication/recovery checks. Those UI assertions are **compiled but not executed** here. Compact/standard/large Light/Dark commands and manual fullscreen/accessibility acceptance are documented in UI_VALIDATION. No fake media files replace blocked captures.
+
+### Files and performance boundary
+
+Created `DesignSystem.swift`, `ActivityModels.swift`, `ActivityTimeline.swift`, `ActivityTests.swift`, `ChatPresentationTests.swift`. Modified `WorkspaceViews.swift`, `RootView.swift`, `ComposerView.swift`, `AppModel.swift`, the Xcode project/UI tests and required docs. Existing backend locking, account isolation, explicit approval, preview/confirmation, deduplication and cooldown behavior remain covered by the unchanged Python regressions.
+
+Native lists/lazy message rows, 50-row cached pages, the 200-message cap, 100-event timeline and local filters bound rendering/data work. Navigation makes cached SQLite IPC reads, not automatic Telegram refreshes. No scroll-FPS, application RSS/idle CPU or live responsiveness benchmark could be measured here. Actual account-connected GUI behavior is user-reported; no live Telegram connection or send was tested during this change.
+
+Final responsive-layout artifacts: both Debug and Release builds succeeded after the last view changes; both strict deep signature checks passed. Bundled Python source matches the unchanged backend, with zero private-artifact filename candidates. No screenshots were captured (zero image files under the screenshot directory). Static documentation validation passes for 14 documents and 63 local links/images. No visual or live-Telegram guarantee is inferred.

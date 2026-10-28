@@ -34,14 +34,14 @@ struct RootView: View {
                     VStack(alignment: .leading) { Text("Telegram Manager").font(.headline); Text("Personal workspace").font(.caption).foregroundStyle(.secondary) }
                     Spacer()
                 }.padding(.horizontal, 16).padding(.vertical, 22)
-                Menu {
-                    ForEach(model.profiles.filter { !$0.archived }) { profile in
-                        Button(profile.title + (profile.active ? " ✓" : "")) { if !profile.active { model.switchProfile(profile) } }.disabled(model.busy)
-                    }
-                    Divider(); Button("Manage Accounts…") { model.screen = .accounts }
-                } label: { Label(model.activeProfile?.title ?? "Choose Account", systemImage: "person.crop.circle") }.padding(.horizontal, 16).padding(.bottom, 12).accessibilityIdentifier("accountSwitcher")
-                List(Screen.allCases, selection: $model.screen) { screen in Label(screen.rawValue, systemImage: screen.symbol).tag(screen).padding(.vertical, 4) }
-                    .listStyle(.sidebar).accessibilityIdentifier("workspaceSidebar")
+                accountMenu
+                List(selection: $model.screen) {
+                    sidebarSection("Overview", screens: [.dashboard])
+                    sidebarSection("Messaging", screens: [.chats, .composer, .drafts])
+                    sidebarSection("Groups", screens: [.groups, .permissions, .destinations])
+                    sidebarSection("Records", screens: [.history, .activity])
+                    sidebarSection("App", screens: [.accounts, .settings])
+                }.listStyle(.sidebar).accessibilityIdentifier("workspaceSidebar")
                 VStack(alignment: .leading, spacing: 6) {
                     Label(model.connected ? "Account connected" : model.backendOnline ? "Account not connected" : "Backend unavailable", systemImage: model.connected ? "checkmark.circle.fill" : "circle.dotted")
                         .font(.caption).foregroundStyle(model.connected ? .green : .secondary)
@@ -67,7 +67,7 @@ struct RootView: View {
                     case .chats: ChatsView(model: model)
                     case .accounts: AccountsView(model: model)
                     case .drafts: DraftsView(model: model)
-                    case .activity: ActivityView(model: model)
+                    case .activity: ActivityTimeline(events: model.activity)
                     case .groups: GroupsView(model: model, inspectionMode: false)
                     case .permissions: GroupsView(model: model, inspectionMode: true)
                     case .composer: ComposerView(model: model)
@@ -109,6 +109,38 @@ struct RootView: View {
         }
         .tint(.blue)
     }
+    @ViewBuilder private func sidebarSection(_ title: String, screens: [Screen]) -> some View {
+        Section(title) {
+            ForEach(screens) { screen in
+                Label(screen.rawValue, systemImage: screen.symbol).tag(screen).padding(.vertical, 4)
+            }
+        }
+    }
+    private var accountMenu: some View {
+        Menu {
+            ForEach(model.profiles.filter { !$0.archived }) { profile in
+                Button { if !profile.active { model.switchProfile(profile) } } label: {
+                    Label(profile.title, systemImage: profile.active ? "checkmark.circle.fill" : "person.crop.circle")
+                }.disabled(model.busy || model.isConnecting)
+            }
+            Divider()
+            Button("Add Account…", systemImage: "person.badge.plus") { model.screen = .accounts }
+            Button("Manage Accounts…", systemImage: "person.2.badge.gearshape") { model.screen = .accounts }
+            Divider()
+            Button("Disconnect Account…", systemImage: "bolt.slash") { model.screen = .accounts }
+            Button("Log Out of Telegram…", systemImage: "rectangle.portrait.and.arrow.right") { model.screen = .accounts }
+        } label: {
+            AccountIdentityView(name: model.activeProfile?.title ?? model.accountName,
+                                identifier: model.accountID == 0 ? "Not authenticated" : String(model.accountID),
+                                status: model.connected ? "Connected" : model.connectionTitle,
+                                connected: model.connected)
+        }.menuStyle(.borderlessButton).padding(12)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 12).padding(.bottom, 12)
+            .disabled(model.busy || model.isConnecting).accessibilityIdentifier("accountSwitcher")
+            .help("Switch accounts or open account management; logout requires its own confirmation")
+    }
+
 }
 
 struct DashboardView: View {
@@ -156,11 +188,18 @@ struct DashboardView: View {
                 }
                 Surface(title: "Recent activity") {
                     if model.activity.isEmpty { Text("Operations you start will appear here. Nothing runs automatically.").foregroundStyle(.secondary) }
-                    ForEach(Array(model.activity.prefix(8).enumerated()), id: \.offset) { _, text in Label(text, systemImage: "clock").font(.callout) }
+                    ForEach(Array(model.activity.prefix(8))) { event in
+                        HStack(alignment: .top) {
+                            Label(event.title, systemImage: event.kind.symbol).font(.callout)
+                            Spacer()
+                            Text(event.status.title).font(.caption).foregroundStyle(.secondary)
+                            Text(event.date, style: .time).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 Text("Text-posting permission is not permission to advertise. Always follow group rules.").font(.caption).foregroundStyle(.secondary)
-            }.padding(28)
-        }.background(Color(nsColor: .windowBackgroundColor))
+            }.padding(28).frame(maxWidth: .infinity, alignment: .topLeading)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(Color(nsColor: .windowBackgroundColor))
     }
     func metric(_ title: String, key: String, icon: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 12) {

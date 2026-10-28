@@ -25,7 +25,9 @@ struct ComposerView: View {
     }
     private var composingPane: some View {
             VStack(alignment: .leading, spacing: 18) {
-                HStack { VStack(alignment: .leading, spacing: 6) { Text("Compose with intention").font(.title.weight(.semibold)); Text("One message. One explicitly approved destination.").foregroundStyle(.secondary) }; Spacer() }
+                PageHeader(title: "Compose message", subtitle: "One message. One explicitly approved destination.", symbol: "square.and.pencil")
+                Label("From \(model.accountName.isEmpty ? model.activeProfile?.title ?? "Selected account" : model.accountName) · \(model.accountID)", systemImage: "person.crop.circle")
+                    .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                 TextEditor(text: $model.draft).font(.body).padding(8).scrollContentBackground(.hidden)
                     .background(.background, in: RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
@@ -69,7 +71,7 @@ struct ComposerView: View {
                         .buttonStyle(.borderedProminent).disabled(!model.canSend).accessibilityIdentifier("sendOnce")
                     Text("Permissions are checked again before submission. No automatic retries. Uncertain outcomes must be checked in History and Telegram.").font(.caption).foregroundStyle(.secondary)
                 } else {
-                    ContentUnavailableView("No approved preview", systemImage: "doc.text.magnifyingglass", description: Text("Compose a message, select one approved destination, then verify permissions. Changing either clears the preview."))
+                    EmptyStateView(title: "No approved preview", symbol: "doc.text.magnifyingglass", description: "Compose a message, select one approved destination, then verify permissions. Changing either clears the preview.").frame(minHeight: 260)
                 }
                 Spacer(minLength: 0)
             }.padding(20)
@@ -81,23 +83,26 @@ struct DestinationsView: View {
     @State private var revoking: TelegramGroup?
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Explicitly approved destinations").font(.title2.weight(.semibold))
-            Text("Approval records your choice of destination. Every message still needs its own preview, fresh permission check and exact confirmation.").foregroundStyle(.secondary)
+            PageHeader(title: "Approved destinations", subtitle: "Manage groups you have explicitly approved for message delivery.", symbol: "checkmark.seal")
+            Text("Each message still requires a fresh permission check and exact confirmation.").font(.caption).foregroundStyle(.secondary)
             if model.approvals.isEmpty {
-                ContentUnavailableView("No approved destinations", systemImage: "checkmark.seal", description: Text("Choose a group in Groups and explicitly approve it from the inspector."))
-                Button("Browse Groups") { model.screen = .groups }
+                EmptyStateView(title: model.approvedSearch.isEmpty ? "No approved destinations" : "No matching destinations", symbol: "checkmark.seal", description: "Choose a group in Groups and explicitly approve it from the inspector.", actionTitle: "Browse Groups", action: { model.screen = .groups })
             } else {
                 List(model.approvals) { group in
                     HStack(spacing: 14) {
                         Image(systemName: "checkmark.seal.fill").font(.title2).foregroundStyle(.blue)
-                        VStack(alignment: .leading, spacing: 5) { Text(group.name).font(.headline); Text("ID \(group.id) · checked \(readableTime(group.checked))").font(.caption).foregroundStyle(.secondary) }
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(group.name).font(.headline)
+                            Text("ID \(group.id) · checked \(readableTime(group.checked))").font(.caption).foregroundStyle(.secondary)
+                            Text("Explicitly approved · Account \(model.accountID)").font(.caption).foregroundStyle(.secondary)
+                        }
                         Spacer(); PermissionBadge(state: group.permission)
                         Button("Compose") { model.destination = group.id; model.screen = .composer }
-                        Button("Revoke", role: .destructive) { revoking = group }.disabled(model.busy)
+                        Button("Revoke", role: .destructive) { revoking = group }.disabled(model.busy || !model.backendOnline)
                     }.padding(.vertical, 8)
                 }.listStyle(.inset)
             }
-        }.padding(24)
+        }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .searchable(text: $model.approvedSearch, prompt: "Search approved groups")
         .onChange(of: model.approvedSearch) { _, _ in Task { await model.loadApprovals() } }
         .task { await model.loadApprovals() }
@@ -110,25 +115,58 @@ struct DestinationsView: View {
 struct HistoryView: View {
     @ObservedObject var model: AppModel
     @State private var selected: Int?
+    @State private var query = ""
+    @State private var status = "all"
+    @State private var sort = "newest"
+    private var records: [Delivery] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.deliveries.filter { record in
+            (status == "all" || record.status == status) &&
+            (needle.isEmpty || [record.destination, record.data["destination_name"].string,
+                record.detail, record.data["message_preview"].string].contains { $0.localizedCaseInsensitiveContains(needle) })
+        }.sorted { left, right in
+            if sort == "destination" {
+                let a = left.data["destination_name"].string, b = right.data["destination_name"].string
+                if a != b { return a.localizedStandardCompare(b) == .orderedAscending }
+            }
+            if left.date == right.date { return left.id > right.id }
+            return sort == "oldest" ? left.date < right.date : left.date > right.date
+        }
+    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("Delivery ledger").font(.title2.weight(.semibold)); Spacer(); Button("Refresh") { Task { await model.loadHistory() } } }
-            Text("Unknown or pending outcomes are never retried automatically. Legacy records may not contain message previews or Telegram message IDs.").font(.callout).foregroundStyle(.secondary)
-            if model.deliveries.isEmpty { ContentUnavailableView("No delivery records", systemImage: "clock.arrow.circlepath", description: Text("Delivery results appear here after an explicitly confirmed send.")) }
-            else {
-                Table(model.deliveries, selection: $selected) {
-                    TableColumn("Date") { Text(readableTime($0.date)) }.width(min: 130, ideal: 170)
+        VStack(alignment: .leading, spacing: 16) {
+            PageHeader(title: "Delivery history", subtitle: "Review message delivery outcomes and previously confirmed sends.", symbol: "clock.arrow.circlepath")
+            Text("Pending or uncertain outcomes are never retried automatically.").font(.caption).foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { filters }
+                VStack(alignment: .leading, spacing: 10) { filters }
+            }
+            if records.isEmpty {
+                EmptyStateView(title: model.deliveries.isEmpty ? "No delivery records" : "No matching deliveries", symbol: "clock.arrow.circlepath", description: model.deliveries.isEmpty ? "Delivery results appear here after a message you explicitly confirm. Nothing sends from this screen." : "Try a different search or status filter.", actionTitle: model.deliveries.isEmpty ? "Compose a Message" : "Clear Filters", action: {
+                    if model.deliveries.isEmpty { model.screen = .composer } else { query = ""; status = "all" }
+                })
+            } else {
+                Table(records, selection: $selected) {
+                    TableColumn("Date") { Text(readableTime($0.date)) }.width(min: 120, ideal: 160)
                     TableColumn("Destination") { record in
                         VStack(alignment: .leading, spacing: 3) {
                             Text(record.data["destination_name"].string.isEmpty ? record.destination : safeDisplay(record.data["destination_name"].string)).lineLimit(2)
                             Text(record.destination).font(.caption).foregroundStyle(.secondary)
                         }.textSelection(.enabled)
-                    }.width(min: 130, ideal: 180)
-                    TableColumn("Status") { delivery in Label(delivery.status.capitalized, systemImage: delivery.status == "sent" ? "checkmark.circle" : "exclamationmark.circle").foregroundStyle(delivery.status == "sent" ? .green : .orange) }.width(min: 90, ideal: 120)
-                    TableColumn("Result") { Text($0.detail).font(.callout).lineLimit(2) }
-                }
-                if let record = model.deliveries.first(where: { $0.id == selected }) {
-                    Surface(title: "Record details") {
+                    }.width(min: 120, ideal: 180)
+                    TableColumn("Account") { Text($0.data["account"].string).font(.caption).monospacedDigit() }.width(min: 65, ideal: 90)
+                    TableColumn("Status") { delivery in
+                        StatusBadge(title: delivery.status.capitalized, symbol: delivery.status == "sent" ? "checkmark.circle" : "exclamationmark.circle", tone: delivery.status == "sent" ? .success : ["failed", "rejected"].contains(delivery.status) ? .failure : .warning)
+                    }.width(min: 100, ideal: 125)
+                    TableColumn("Result") { record in
+                        VStack(alignment: .leading, spacing: 4) {
+                            if !record.data["message_preview"].string.isEmpty { Text(safeDisplay(record.data["message_preview"].string)).font(.callout).lineLimit(1) }
+                            Text(record.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }.padding(.vertical, 3)
+                    }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity).accessibilityIdentifier("deliveryHistoryTable")
+                if let record = records.first(where: { $0.id == selected }) {
+                    SectionCard(title: "Record details") {
                         Text(record.detail).textSelection(.enabled)
                         LabeledContent("Ledger ID", value: String(record.id))
                         LabeledContent("Message ID", value: record.data["telegram_message_id"].string.isEmpty ? "Not recorded" : record.data["telegram_message_id"].string)
@@ -137,8 +175,18 @@ struct HistoryView: View {
                     }
                 }
             }
-        }.padding(24).searchable(text: $model.historySearch, prompt: "Search delivery history")
-            .onChange(of: model.historySearch) { _, _ in Task { await model.loadHistory() } }
+        }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .task { await model.loadHistory() }
+    }
+    @ViewBuilder private var filters: some View {
+        SearchToolbar(text: $query, prompt: "Search cached delivery history").frame(minWidth: 180)
+            .accessibilityIdentifier("historySearch")
+        FilterMenu(title: "Status", selection: $status, options: ["all", "sent", "pending", "uncertain", "blocked", "rejected", "failed", "cancelled"])
+            .accessibilityIdentifier("historyStatusFilter")
+        FilterMenu(title: "Sort", selection: $sort, options: ["newest", "oldest", "destination"])
+            .accessibilityIdentifier("historySort")
+        Button { Task { await model.loadHistory() } } label: { Image(systemName: "arrow.clockwise") }
+            .disabled(model.busy).help("Reload the latest 100 delivery records").accessibilityLabel("Refresh delivery history")
+        Text("\(records.count) of \(model.deliveries.count) loaded").font(.caption).foregroundStyle(.secondary).fixedSize()
     }
 }

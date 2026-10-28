@@ -21,6 +21,8 @@ enum Screen: String, CaseIterable, Identifiable {
     @Published var groups: [TelegramGroup] = []
     @Published var profiles: [AccountProfile] = []
     @Published var chats: [ChatSummary] = []
+    @Published private(set) var chatsLoading = false
+    @Published private(set) var messagesLoading = false
     @Published var chatMessages: [ChatMessage] = []
     @Published var selectedChat: ChatSummary?
     @Published var chatDrafts: [JSONValue] = []
@@ -56,7 +58,9 @@ enum Screen: String, CaseIterable, Identifiable {
     @Published var operation = ""
     @Published var progress = ""
     @Published var errorMessage: String?
-    @Published var activity: [String] = []
+    @Published var activity: [ActivityEvent] = []
+    private var currentActivityID: UUID?
+    private var currentActivityOutcome: ActivityStatus?
     @Published var backendOnline = false
     @Published private(set) var isConnecting = false
     @Published private(set) var connectionFailureCode = ""
@@ -70,6 +74,12 @@ enum Screen: String, CaseIterable, Identifiable {
     @Published var historySearch = ""
     @Published var approvedSearch = ""
     private var queryTask: Task<Void, Never>?
+    private var chatListTask: Task<Void, Never>?
+    private var chatListRevision = 0
+    private var messageListRevision = 0
+    private var activeMessageSearch = ""
+    private var fixtureChatSource: [ChatSummary] = []
+    private var fixtureMessageSource: [ChatMessage] = []
     private var operationTask: Task<Void, Never>?
     private var started = false
     private var draftLoaded = false
@@ -263,15 +273,39 @@ enum Screen: String, CaseIterable, Identifiable {
             progress = "\(phase.capitalized) · \(index)\(name.isEmpty ? "" : " · " + name)"
         }
     }
-    func addActivity(_ text: String) { activity.insert(safeDisplay(text), at: 0); if activity.count > 30 { activity.removeLast() } }
+    func addActivity(_ text: String) {
+        ActivityHistory.insert(ActivityEvent(kind: ActivityKind.classify(text), status: .info,
+            accountID: accountID == 0 ? nil : String(accountID), profileID: activeProfileID,
+            accountName: accountName.isEmpty ? activeProfile?.title : accountName), into: &activity)
+    }
+    private func recordProcessed(_ count: Int) {
+        if let id = currentActivityID { ActivityHistory.update(id: id, in: &activity, completed: count) }
+    }
+    private func recordDeliveryOutcome(_ result: JSONValue) {
+        switch result["delivery"]["status"].string {
+        case "sent": currentActivityOutcome = .succeeded
+        case "rejected", "failed": currentActivityOutcome = .failed
+        default: currentActivityOutcome = .warning
+        }
+    }
     func run(_ title: String, action: @escaping @MainActor () async throws -> Void) async {
         guard !busy else { return }
         busy = true; operation = title; progress = ""
-        defer { busy = false; operation = "" }
-        do { try await action(); addActivity(title + " completed"); notify(title + " completed") }
-        catch is CancellationError { addActivity(title + " cancelled; saved progress retained") }
+        let event = ActivityEvent(kind: ActivityKind.classify(title), accountID: accountID == 0 ? nil : String(accountID),
+                                  profileID: activeProfileID, accountName: accountName.isEmpty ? activeProfile?.title : accountName)
+        ActivityHistory.insert(event, into: &activity)
+        currentActivityID = event.id; currentActivityOutcome = nil
+        defer { busy = false; operation = ""; currentActivityID = nil; currentActivityOutcome = nil }
+        do {
+            try await action()
+            let outcome = currentActivityOutcome ?? .succeeded
+            ActivityHistory.update(id: event.id, in: &activity, status: outcome)
+            notify(event.title + " · " + outcome.title)
+        }
+        catch is CancellationError { ActivityHistory.update(id: event.id, in: &activity, status: .cancelled) }
         catch {
-            errorMessage = error.localizedDescription; addActivity(title + " stopped")
+            errorMessage = error.localizedDescription
+            ActivityHistory.update(id: event.id, in: &activity, status: (error as? BackendFailure)?.code == "cooldown" ? .warning : .failed)
             if let failure = error as? BackendFailure {
                 let transport = ["already_running", "backend_unavailable", "runtime_missing", "launch_failed", "protocol_error", "startup", "shutting_down", "backend_stopping", "pipe_setup"]
                 if transport.contains(failure.code) {
@@ -341,7 +375,8 @@ enum Screen: String, CaseIterable, Identifiable {
     }
     func discover() {
         operationTask = Task { await run("Discovering groups") {
-            _ = try await self.backend.request("discover", timeout: 600)
+            let result = try await self.backend.request("discover", timeout: 600)
+            self.recordProcessed(result["processed"].int)
             await self.refreshStatus(); await self.loadGroups()
         } }
     }
@@ -358,7 +393,8 @@ enum Screen: String, CaseIterable, Identifiable {
         operationTask = Task { await run("Inspecting selected / pending groups") {
             var params: [String: JSONValue] = ["limit": .integer(self.inspectionLimit), "force": .bool(false)]
             if !selection.isEmpty { params["destinations"] = .array(selection.sorted().map(JSONValue.integer)) }
-            _ = try await self.backend.request("inspect_pending", params: params, timeout: 600)
+            let result = try await self.backend.request("inspect_pending", params: params, timeout: 600)
+            self.recordProcessed(result["inspected"].int)
             await self.refreshStatus(); await self.loadGroups()
         } }
     }
@@ -416,7 +452,7 @@ enum Screen: String, CaseIterable, Identifiable {
         invalidatePreview()
         operationTask = Task { await run("Sending one approved message") {
             let result = try await self.backend.request("send", params: ["token": .string(token), "confirmation": .string(exactConfirmation)], timeout: 180)
-            self.addActivity(result["message"].string)
+            self.recordDeliveryOutcome(result)
             await self.refreshStatus(); await self.loadHistory()
         } }
     }
@@ -452,7 +488,7 @@ enum Screen: String, CaseIterable, Identifiable {
     func shutdown() async {
         guard !isUIFixture else { return }
         shuttingDown = true
-        queryTask?.cancel(); operationTask?.cancel(); conversationTask?.cancel()
+        queryTask?.cancel(); chatListTask?.cancel(); operationTask?.cancel(); conversationTask?.cancel()
         await operationTask?.value
         await flushAutosaves()
         if backendOnline && accountID != 0 { try? await preserveDraftsBeforeContextChange() }
@@ -467,8 +503,8 @@ extension AppModel {
     }
     private func preserveDraftsBeforeContextChange() async throws {
         accountEpoch += 1
-        queryTask?.cancel(); conversationTask?.cancel(); draftAutoTask?.cancel(); chatAutoTask?.cancel()
-        await queryTask?.value; await conversationTask?.value; await draftAutoTask?.value; await chatAutoTask?.value
+        queryTask?.cancel(); chatListTask?.cancel(); conversationTask?.cancel(); draftAutoTask?.cancel(); chatAutoTask?.cancel()
+        await queryTask?.value; await chatListTask?.value; await conversationTask?.value; await draftAutoTask?.value; await chatAutoTask?.value
         guard accountID != 0 else { return }
         if draftDirty {
             _ = try await backend.request("draft.save", params: ["message": .string(draft)])
@@ -480,7 +516,9 @@ extension AppModel {
     }
     private func clearAccountContext() {
         accountEpoch += 1
-        queryTask?.cancel(); conversationTask?.cancel()
+        queryTask?.cancel(); chatListTask?.cancel(); conversationTask?.cancel()
+        chatListRevision += 1; messageListRevision += 1
+        chatsLoading = false; messagesLoading = false; activeMessageSearch = ""
         invalidatePreview(); invalidateChatPreview()
         groups = []; approvals = []; deliveries = []; selectedGroup = nil; detail = nil
         selectedInspection = []; destination = nil; draft = ""; draftSaved = ""; draftLoaded = false; savedDraftMessage = ""
@@ -530,11 +568,32 @@ extension AppModel {
             await self.refreshAll()
         } }
     }
+    func scheduleChatSearch() {
+        chatPage = 0
+        chatListTask?.cancel()
+        chatListTask = Task {
+            do { try await Task.sleep(nanoseconds: 250_000_000) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            await loadChats()
+        }
+    }
     func loadChats() async {
-        guard !isUIFixture else { return }
         guard accountID != 0 else { chats = []; chatTotal = 0; return }
-        let epoch = accountEpoch
-        if let value = try? await backend.request("chats.list", params: ["query": .string(chatQuery), "kind": .string(chatKind), "page": .integer(chatPage), "size": .integer(pageSize)]), epoch == accountEpoch {
+        chatListRevision += 1
+        let revision = chatListRevision, epoch = accountEpoch
+        let query = chatQuery, kind = chatKind, page = chatPage
+        chatsLoading = true
+        defer { if revision == chatListRevision { chatsLoading = false } }
+        if isUIFixture {
+            let filtered = fixtureChatSource.filter {
+                (kind == "all" || $0.kind == kind) && (query.isEmpty || ($0.title + " " + $0.data["username"].string + " " + String($0.id)).localizedCaseInsensitiveContains(query))
+            }
+            chatTotal = filtered.count
+            chats = Array(filtered.dropFirst(max(0, page) * pageSize).prefix(pageSize))
+            return
+        }
+        if let value = try? await backend.request("chats.list", params: ["query": .string(query), "kind": .string(kind), "page": .integer(page), "size": .integer(pageSize)]), !Task.isCancelled, epoch == accountEpoch, revision == chatListRevision, query == chatQuery, kind == chatKind, page == chatPage {
             chats = value["chats"].array.map(ChatSummary.init); chatTotal = value["total"].int
         }
     }
@@ -556,11 +615,14 @@ extension AppModel {
     }
     func selectChat(_ chat: ChatSummary) {
         guard !busy || operation == "Opening Saved Messages" else { return }
+        guard selectedChat?.id != chat.id else { return }
         let previous = selectedChat, previousText = chatDraft
         conversationTask?.cancel(); conversationRevision += 1
         invalidateChatPreview()
         let revision = conversationRevision, epoch = accountEpoch
         selectedChat = chat; chatMessages = []; chatDraft = ""; savedChatMessage = ""; chatDraftSaved = ""; chatReply = nil; hasMoreMessages = false
+        activeMessageSearch = ""; messageListRevision += 1; messagesLoading = false
+        if isUIFixture { chatMessages = fixtureMessageSource; return }
         conversationTask = Task {
             do {
                 if let previous {
@@ -575,17 +637,27 @@ extension AppModel {
             } catch is CancellationError {} catch { errorMessage = error.localizedDescription }
         }
     }
-    func loadMessages(older: Bool = false, search: String = "") async {
+    func loadMessages(older: Bool = false, search: String? = nil) async {
         guard let chat = selectedChat, connected else { return }
-        let epoch = accountEpoch, revision = conversationRevision
+        if let search { activeMessageSearch = search }
+        messageListRevision += 1
+        let epoch = accountEpoch, revision = conversationRevision, requestRevision = messageListRevision
+        let remoteSearch = activeMessageSearch
+        messagesLoading = true
+        defer { if requestRevision == messageListRevision { messagesLoading = false } }
+        if isUIFixture {
+            chatMessages = fixtureMessageSource.filter { remoteSearch.isEmpty || $0.text.localizedCaseInsensitiveContains(remoteSearch) }
+            return
+        }
         do {
             var params: [String: JSONValue] = ["destination": .integer(chat.id), "limit": .integer(50)]
             if older && nextMessageOffset > 0 { params["offset_id"] = .integer(nextMessageOffset) }
-            if !search.isEmpty { params["search"] = .string(search) }
+            if !remoteSearch.isEmpty { params["search"] = .string(remoteSearch) }
             let result = try await backend.request("messages.list", params: params, timeout: 180)
-            guard epoch == accountEpoch && revision == conversationRevision else { return }
+            guard !Task.isCancelled && epoch == accountEpoch && revision == conversationRevision && requestRevision == messageListRevision && selectedChat?.id == chat.id else { return }
             let rows = result["messages"].array.map(ChatMessage.init)
-            if older { chatMessages = Array((chatMessages + rows).prefix(200)) } else { chatMessages = rows }
+            var seen = Set<Int>()
+            chatMessages = Array(((older ? chatMessages : []) + rows).filter { seen.insert($0.id).inserted }.prefix(200))
             nextMessageOffset = result["next_offset_id"].int; hasMoreMessages = result["has_more"].bool && chatMessages.count < 200
         } catch is CancellationError {} catch { errorMessage = error.localizedDescription }
     }
@@ -631,7 +703,7 @@ extension AppModel {
         invalidateChatPreview()
         operationTask = Task { await run("Sending one personal message") {
             let result = try await self.backend.request("chat.send", params: ["account_id": .integer(account), "token": .string(token), "confirmation": .string(confirmation)], timeout: 180)
-            self.addActivity(result["message"].string)
+            self.recordDeliveryOutcome(result)
             await self.loadMessages(); await self.loadHistory(); await self.refreshStatus()
         } }
     }
@@ -672,13 +744,41 @@ extension AppModel {
             TelegramGroup(data: .object(["id": .integer(-1001 - index), "name": .string(title), "title": .string(title), "kind": .string("supergroup"), "effective_permission": .string(["allowed", "denied", "unknown"][index])]))
         }
         totalGroups = groups.count
-        chats = [ChatSummary(data: .object(["id": .integer(202), "name": .string("Example Conversation"), "kind": .string("private"), "last_message": .string("A synthetic conversation preview 👋")]))]
-        chatTotal = chats.count; selectedChat = chats.first
-        chatMessages = [ChatMessage(data: .object(["id": .integer(1), "text": .string("Welcome! Synthetic test data.\nසිංහල · தமிழ் · 👩‍💻"), "sender_name": .string("Example Contact"), "outgoing": .bool(false)]))]
-        draft = "Hello community! 👋"; chatDraft = "A personal draft"; activity = ["Synthetic fixture loaded. No Telegram connection was made."]
+        let fixtureNames = ["ශ්‍රී ලංකා Community — Long conversation name 👩🏽‍💻", "தமிழ் Developers and Engineering Discussion", "Example Conversation", "Engineering Study Group"]
+        fixtureChatSource = (0..<198).map { index in
+            ChatSummary(data: .object(["id": .integer(202 + index), "name": .string(fixtureNames[index % fixtureNames.count] + " \(index + 1)"),
+                "kind": .string(index % 5 == 4 ? "supergroup" : "private"), "username": .string("example_\(index + 1)"),
+                "last_message": .string("A synthetic conversation preview · සිංහල · தமிழ் · 👋"),
+                "last_date": .string("2026-10-28T12:30:00+00:00"), "unread_count": .integer(index % 9 == 0 ? 3 : 0)]))
+        }
+        chatTotal = fixtureChatSource.count; chats = Array(fixtureChatSource.prefix(pageSize)); selectedChat = chats.first
+        fixtureMessageSource = (1...12).map { index in
+            ChatMessage(data: .object(["id": .integer(index), "text": .string("Synthetic message \(index).\nසිංහල · தமிழ் · 👩🏽‍💻"),
+                "sender_name": .string(index % 2 == 0 ? "Example Account" : "Example Contact"),
+                "date": .string("2026-10-28T12:\(String(format: "%02d", index)):00+00:00"), "outgoing": .bool(index % 2 == 0)]))
+        }
+        chatMessages = fixtureMessageSource
+        draft = "Hello community! 👋"; chatDraft = "A personal draft"
+        activity = [ActivityKind.discovery, .inspection, .connection].enumerated().map { index, kind in
+            var event = ActivityEvent(kind: kind, status: index == 1 ? .warning : .succeeded, accountID: "101", profileID: "fixture", accountName: "Example Account", date: Date().addingTimeInterval(Double(-index * 180)))
+            if index == 0 { event.update(completed: 3) }
+            return event
+        }
+        approvals = [groups[0]]
+        deliveries = ["sent", "blocked", "uncertain", "rejected", "pending"].enumerated().map { index, state in
+            Delivery(data: .object(["id": .integer(index + 1), "account": .integer(101), "destination": .integer(-1001),
+                "destination_name": .string("Example Community · සිංහල தமிழ் 👩🏽‍💻"), "status": .string(state),
+                "created_at": .string("2026-10-28T12:30:00+00:00"), "updated_at": .string("2026-10-28T12:30:00+00:00"),
+                "message_preview": .string("Synthetic fixture preview; no Telegram request was made."),
+                "telegram_message_id": index == 0 ? .integer(9001) : .null, "detail": .string("Fixture-only delivery state: " + state)]))
+        }
         let fixtureEnvironment = ProcessInfo.processInfo.environment
         if let target = fixtureEnvironment["TGM_UI_SCREEN"], let value = Screen(rawValue: target) { screen = value }
-        if fixtureEnvironment["TGM_UI_EMPTY"] == "1" { groups = []; chats = []; profiles = []; selectedChat = nil; chatMessages = []; totalGroups = 0; chatTotal = 0 }
+        if fixtureEnvironment["TGM_UI_EMPTY"] == "1" { groups = []; chats = []; fixtureChatSource = []; profiles = []; selectedChat = nil; chatMessages = []; activity = []; approvals = []; deliveries = []; totalGroups = 0; chatTotal = 0 }
+        if fixtureEnvironment["TGM_UI_NO_SELECTION"] == "1" { selectedChat = nil; chatMessages = [] }
+        if fixtureEnvironment["TGM_UI_ACTIVITY_EMPTY"] == "1" { activity = [] }
+        if fixtureEnvironment["TGM_UI_HISTORY_EMPTY"] == "1" { deliveries = [] }
+        if fixtureEnvironment["TGM_UI_DESTINATIONS_EMPTY"] == "1" { approvals = [] }
         if fixtureEnvironment["TGM_UI_INSPECTOR"] == "1" { detail = groups.first; selectedGroup = groups.first?.id }
         if let stage = fixtureEnvironment["TGM_UI_AUTH_STAGE"], ["credentials", "phone", "code", "password", "bind_account"].contains(stage) { authStage = stage; authAccount = 101 }
         if fixtureEnvironment["TGM_UI_ERROR"] == "1" { errorMessage = "The backend could not be started. Existing local data was preserved. This is a synthetic error state." }

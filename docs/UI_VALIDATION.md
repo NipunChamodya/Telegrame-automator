@@ -109,3 +109,75 @@ Recovery-layout validation rerun: `./macos/build.sh Debug` succeeded with the re
 The app now uses one workspace `Window`; Settings shares its model/transport. Command-N changes composition screen rather than creating another workspace backend. Repeated Quit waits for the initial cleanup. Unit/transport tests verify idempotent start and reconnect; actual menu/window and keyboard navigation still require local UI execution.
 
 Manual follow-up must include long names, Sinhala/Tamil/emoji, populated history, destructive confirmation sheets using disposable profiles, Light/Dark, compact/standard/large/fullscreen, high contrast, reduced motion, text scaling and VoiceOver. Existing fixture screenshot automation does not establish complete coverage of every confirmation/accessibility setting. No screenshot filename is listed as captured when none exists.
+
+## Native presentation repairs
+
+Source inspection found fixed-width split panes and intrinsic-height stacks inside an expanding root frame. The root frame's default centered alignment did not itself make each screen consume the available height. Chats now uses a finite GeometryReader, an explicitly expanding native conversation List and message-history region, with a compact single-pane/back arrangement. The existing split-pane minimum widths and the composer editor/review widths are replaced by width-dependent presentation. These findings explain the constraints changed in code; they are not observations of rendered screenshots in this restricted environment.
+
+The sidebar now groups navigation into Overview, Messaging, Groups, Records and App. Its account menu uses a native account symbol, actual profile identity and connection status; Add, Manage, Disconnect and Logout open Accounts, retaining its separate confirmation workflow. Shared PageHeader, SectionCard, EmptyStateView, AccountIdentityView, SearchToolbar, FilterMenu and StatusBadge components use native semantic styles. Destinations and History fill the detail region from the top leading edge, with empty-state actions inside the corresponding state rather than detached below it.
+
+Delivery History filters and sorts only the latest loaded ledger page (at most 100 records), with a displayed loaded count. Search, status and ordering controls do not send Telegram requests or alter delivery records. Activity is a separate bounded, typed, session-only operation timeline; it is not the persistent delivery ledger and contains no message-body field.
+
+Integrated Debug build succeeded, and `./macos/test.sh` executed **44 native tests with zero failures** after these repairs. These tests include fixture presentation/state, activity models and IPC transport. They do not establish visual appearance. New XCUITest assertions cover conversation-list geometry, cached search/pagination/selection, integrated empty-state actions, history controls and composer confirmation safety using synthetic data only.
+
+The post-repair screenshot run `./macos/screenshots.sh light standard` compiled the expanded UI target but again failed before executing tests with `com.apple.testmanagerd.control` lookup error 159 (“Sandbox restriction”), followed by xcodebuild exit 133. Result: `macos/build/UI-light-20261028-185759.xcresult`; log: `/private/tmp/tgm-presentation-ui-tests.log`. No actual window screenshots or passing graphical geometry assertions were produced. All graphical and accessibility acceptance checks remain to be run in an unlocked interactive macOS session.
+
+## Responsive workspace repair — current evidence
+
+Source changes now address the reported Chats compression with an explicit full-height finite layout, independent native scrolling and footer pagination. Content at least 800 points wide uses a 300–360 point conversation list and remaining-width detail; narrower content shows one pane with Back navigation. Search/actions no longer occupy several full toolbar rows. Rows have stable IDs, native selection, Unicode titles/previews, timestamps, unread badges and safe SF Symbol placeholders. No fixed large list height is used.
+
+History and Destinations have top-leading full-height pages, shared headers, native local filters and centered empty states with their actions inside the state. The larger account switcher and grouped sidebar retain existing lifecycle confirmations. Activity is a typed, account-context timeline of up to 100 session-only events, with status/type/search, timestamps, expandable details, real available counts and a running indicator. It does not persist message content or replace the delivery ledger.
+
+**Actual results:** 44 native model/transport/presentation tests passed; 216 Python tests and 59 subtests passed. The final expanded XCUITest target compiled, but graphical execution failed before any assertion with testmanagerd/control error 159 (sandbox restriction), exit 133. Result: `macos/build/UI-light-20261028-190305.xcresult`; log `/private/tmp/tgm-responsive-ui-final.log`. A separate direct launch of the safe Chats fixture exited -6 and the own-PID window probe found zero windows. No screenshot was captured, inspected, substituted or overwritten.
+
+The UI target now prepares these **16 real-window capture states**, all currently BLOCKED here:
+
+| Requested state | Expected attachment | Actual capture |
+| --- | --- | --- |
+| Dashboard | fixture-dashboard | None |
+| Chats populated | fixture-chats-populated | None |
+| Chats empty | fixture-chats-empty | None |
+| Conversation selected | fixture-conversation-selected | None |
+| Activity populated | fixture-activity-populated | None |
+| Activity empty | fixture-activity-empty | None |
+| History populated | fixture-history-populated | None |
+| History empty | fixture-history-empty | None |
+| Destinations populated | fixture-destinations-populated | None |
+| Destinations empty | fixture-destinations-empty | None |
+| Groups | fixture-groups | None |
+| Permissions | fixture-permissions | None |
+| Composer | fixture-composer | None |
+| Drafts | fixture-drafts | None |
+| Accounts | fixture-accounts | None |
+| Settings | fixture-settings | None |
+
+Fixture data includes 198 synthetic conversations (50 per page), Sinhala/Tamil/emoji/long names, explicit fake ledger states and safe timeline events. Fixture filtering/pagination/selection operates locally and cannot launch the Python backend. UI assertions prepare relative list-height/footer geometry, row selection, cached search/pagination and history status sorting; they are compiled **not passed**. Unit tests separately verify cache query semantics, stale-response rejection, search continuation/deduplication and event privacy/bounds.
+
+### Run all available capture combinations locally
+
+From an unlocked graphical Terminal session:
+
+```sh
+./macos/build.sh Debug
+./macos/test.sh
+for appearance in light dark; do
+  for size in compact standard large; do
+    ./macos/screenshots.sh "$appearance" "$size" || exit 1
+  done
+done
+```
+
+Exports go under `docs/assets/screenshots/<appearance>/<size>/` only after successful tests. Requested sizes are 980×640, 1260×820 and 1500×960 points; macOS may constrain them to the attached display. Keep the `.xcresult` as raw evidence and inspect actual captured dimensions. Before publishing, inspect every image for clipping, overlap, contrast, row visibility, selected state and sensitive content. Fixtures contain no genuine Telegram credentials/messages.
+
+### Manual fallback and fullscreen
+
+If XCUITest is unavailable on the local Mac, open a **Debug fixture-only** instance:
+
+```sh
+open -n --env TGM_UI_FIXTURE=1 --env TGM_TEST_MODE=1 \
+  --env TGM_NO_AUTO_CONNECT=1 --env TGM_UI_SCREEN=Chats \
+  --env TGM_UI_NO_SELECTION=1 --env TGM_DATA_DIR=/private/tmp/tgm-ui-demo \
+  macos/build/Build/Products/Debug/TelegramManager.app
+```
+
+This instance must show Example Account and synthetic data; never capture a real account window. Navigate the fixture screens manually. Use Control-Command-F to enter/leave fullscreen, and Shift-Command-4 then Space to capture only the selected fixture window. Repeat in Light/Dark, compact/standard/large/fullscreen, then review actual PNGs before placing them in the documentation directory. Fullscreen, high contrast, reduced motion, text scaling, VoiceOver and scrolling/keyboard interactions remain manual acceptance items; no claim is made that compilation validates them.

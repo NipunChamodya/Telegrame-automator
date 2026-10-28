@@ -37,6 +37,12 @@ The app now explicitly owns one managed Python process. Ordinary requests never 
 
 If **Another instance is running** appears, use **View Diagnostics** and quit the known competing CLI/app before retrying. The exact owner of the reported real-world conflict could not be inspected in the managed environment. Never delete `manager.lock`, sessions or databases to suppress the error. See [backend lifecycle and safe recovery](docs/BACKEND_LIFECYCLE.md).
 
+## Responsive workspace
+
+Chats now gives the conversation list and history their own expanding scroll areas, compact top controls and anchored pagination. Wide windows show the sidebar, conversation list and detail; narrower windows use list/detail navigation with a Back action. Cached searches debounce locally without refreshing Telegram dialogs.
+
+Activity is a searchable, filterable timeline of up to 100 safe session-only events, separate from the persistent delivery ledger. History adds local status/sort/search controls; approved-destination and history empty states include their action directly below the explanation. A grouped sidebar and larger account switcher make the selected account clearer. Visual acceptance remains unverified where graphical execution is blocked; see [UI validation](docs/UI_VALIDATION.md).
+
 ## Screenshots and visual evidence
 
 No application screenshots or animated demonstrations are published here yet. Genuine graphical capture has not succeeded in the managed development environment; there are no generated mockups presented as screenshots.
@@ -177,7 +183,7 @@ The development configuration is not App-Sandbox-contained. No session or creden
 
 ## Testing and release status
 
-Current verification: **216 Python tests, 59 subtests and 34 Swift tests passed**. Debug and Release builds succeeded and pass strict code-signature verification. Exact evidence, failures and blockers are recorded in [VALIDATION.md](docs/VALIDATION.md).
+Current verification: **216 Python tests, 59 subtests and 44 Swift tests passed**. Debug and Release builds succeeded and pass strict code-signature verification. Exact evidence, failures and blockers are recorded in [VALIDATION.md](docs/VALIDATION.md).
 
 | Quality gate | Evidence |
 | --- | --- |

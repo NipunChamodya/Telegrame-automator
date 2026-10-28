@@ -116,3 +116,16 @@ The new connection panel explains the current state. Choose **View Diagnostics**
 For an instance conflict, quit other CLI terminals or other Debug/Release copies normally before retrying. A previous version may have left an old backend; inspect the exact file user with the safe procedure in [BACKEND_LIFECYCLE.md](BACKEND_LIFECYCLE.md). Never delete a lock file while a process may own it, never reset your database/session, and never end all Python processes. A leftover file alone is harmless.
 
 Closing the app waits for its own child to exit. Opening Settings shares the same backend; additional workspace windows are not created. Disconnect and logout preserve cached records and do not terminate the backend process. If Telegram requires a cooldown, wait for its deadline before explicitly resuming. Uncertain messages are never replayed by recovery.
+
+The sidebar groups screens by purpose. The account menu shows the actual selected profile and connection state; its Disconnect and Logout entries open Accounts so you can review the selected account and confirm the correct operation. Delivery History can search, filter by status and sort the latest loaded 100 records locally; the count describes loaded records, not the entire ledger. Refresh reloads that bounded page without messaging Telegram. Activity records the latest 100 typed operations from the current app session and resets on relaunch; persistent delivery outcomes remain in History.
+
+
+## Chats and the responsive workspace
+
+Use the search field at the top of Chats to search cached names, usernames or IDs. The type menu narrows results locally. Use the arrows at the bottom of the list to page through cached conversations. The actions menu contains explicit Telegram refresh and Saved Messages; navigation does not refresh Telegram automatically.
+
+On a wide window, the list and conversation appear side by side. On a narrow window, choose a row to open it and use Back to return to the list without discarding the selected conversation’s draft. Recent history loads only on explicit conversation selection/refresh; older pages remain bounded. Full names are available through row help and the selected conversation header.
+
+Activity is a searchable timeline of the latest 100 operations in this app session, with timestamps, account context and statuses. It clears when the app exits and is separate from saved Delivery History. Processing counts appear only when actually returned; an uncertain/blocked delivery is not shown as a successful send.
+
+History search/status/sort work on the latest 100 loaded ledger records; Refresh reloads those records. Select a row for message ID/error details. Unknown or pending outcomes are never automatically retried. Destinations shows only explicitly approved groups; Browse Groups is available inside its empty state. The account menu opens account management for confirmed disconnect/logout actions.

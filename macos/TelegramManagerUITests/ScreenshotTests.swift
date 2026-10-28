@@ -66,7 +66,7 @@ final class ScreenshotTests: XCTestCase {
     }
     func testCompactComposerValidationNeverSends() {
         continueAfterFailure = false
-        let app = launch(["TGM_UI_SCREEN": "Composer", "TGM_UI_SIZE": "compact"])
+        let app = launch(["TGM_UI_SCREEN": "Composer", "TGM_UI_SIZE": "compact", "TGM_UI_DESTINATIONS_EMPTY": "1"])
         let editor = app.textViews["messageEditor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         editor.click()
@@ -78,6 +78,87 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertFalse(app.buttons["sendOnce"].exists, "Composition must not create a send approval")
         capture("compact-composer-validation", app: app)
         app.terminate()
+    }
+
+    func testConversationListGeometrySearchPaginationAndSelection() {
+        continueAfterFailure = false
+        let app = launch(["TGM_UI_SCREEN": "Chats", "TGM_UI_NO_SELECTION": "1", "TGM_UI_SIZE": "standard"])
+        let list = app.descendants(matching: .any)["conversationList"].firstMatch
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(list.frame.height, app.windows.firstMatch.frame.height * 0.45, "Conversation list must use available vertical space")
+        XCTAssertGreaterThanOrEqual(list.frame.width, 250)
+        let search = app.textFields["conversationSearch"]
+        XCTAssertTrue(search.exists)
+        search.click(); search.typeText("example_198")
+        XCTAssertTrue(app.staticTexts["1 cached · Page 1"].waitForExistence(timeout: 5))
+        search.typeKey("a", modifierFlags: .command); search.typeKey(XCUIKeyboardKey.delete, modifierFlags: [])
+        XCTAssertTrue(app.staticTexts["198 cached · Page 1"].waitForExistence(timeout: 5))
+        let pagination = app.descendants(matching: .any)["conversationPagination"].firstMatch
+        XCTAssertTrue(pagination.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(pagination.frame.minY, list.frame.maxY - 2, "Pagination must remain below the list")
+        XCTAssertLessThanOrEqual(pagination.frame.maxY, app.windows.firstMatch.frame.maxY)
+        let next = pagination.buttons["Next"]
+        XCTAssertTrue(next.exists); XCTAssertTrue(next.isEnabled)
+        next.click()
+        let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "chatRow_")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5)); row.click()
+        let detail = app.descendants(matching: .any)["conversationDetail"].firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(detail.frame.height, 220)
+        capture("conversation-list-filled", app: app)
+        app.terminate()
+    }
+    func testIntegratedEmptyStateActionsAndHistoryFilters() {
+        continueAfterFailure = false
+        var app = launch(["TGM_UI_SCREEN": "Destinations", "TGM_UI_DESTINATIONS_EMPTY": "1"])
+        XCTAssertTrue(app.buttons["Browse Groups"].waitForExistence(timeout: 5))
+        app.buttons["Browse Groups"].click()
+        XCTAssertTrue(app.descendants(matching: .any)["groupTable"].waitForExistence(timeout: 5))
+        app.terminate()
+        app = launch(["TGM_UI_SCREEN": "History"])
+        XCTAssertTrue(app.descendants(matching: .any)["historyStatusFilter"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["historySort"].exists)
+        let table = app.descendants(matching: .any)["deliveryHistoryTable"].firstMatch
+        XCTAssertTrue(table.exists)
+        let statusFilter = app.popUpButtons["historyStatusFilter"]
+        XCTAssertTrue(statusFilter.exists); statusFilter.click()
+        let uncertain = app.menuItems["Uncertain"]
+        XCTAssertTrue(uncertain.waitForExistence(timeout: 3)); uncertain.click()
+        XCTAssertTrue(table.staticTexts["Uncertain"].waitForExistence(timeout: 3))
+        XCTAssertFalse(table.staticTexts["Sent"].exists)
+        let sorting = app.popUpButtons["historySort"]
+        sorting.click(); app.menuItems["Oldest"].click()
+        capture("history-filters", app: app)
+        app.terminate()
+        app = launch(["TGM_UI_SCREEN": "History", "TGM_UI_HISTORY_EMPTY": "1"])
+        XCTAssertTrue(app.buttons["Compose a Message"].waitForExistence(timeout: 5))
+        app.buttons["Compose a Message"].click()
+        XCTAssertTrue(app.textViews["messageEditor"].waitForExistence(timeout: 5))
+        app.terminate()
+    }
+
+    func testRequiredPresentationScreenshotStates() {
+        continueAfterFailure = false
+        let states: [(String, String, [String: String])] = [
+            ("Dashboard", "dashboard", [:]),
+            ("Chats", "chats-populated", ["TGM_UI_NO_SELECTION":"1"]),
+            ("Chats", "chats-empty", ["TGM_UI_EMPTY":"1"]),
+            ("Chats", "conversation-selected", [:]),
+            ("Activity", "activity-populated", [:]),
+            ("Activity", "activity-empty", ["TGM_UI_ACTIVITY_EMPTY":"1"]),
+            ("History", "history-populated", [:]),
+            ("History", "history-empty", ["TGM_UI_HISTORY_EMPTY":"1"]),
+            ("Destinations", "destinations-populated", [:]),
+            ("Destinations", "destinations-empty", ["TGM_UI_DESTINATIONS_EMPTY":"1"]),
+            ("Groups", "groups", [:]), ("Permissions", "permissions", [:]),
+            ("Composer", "composer", [:]), ("Drafts", "drafts", [:]),
+            ("Accounts", "accounts", [:]), ("Settings", "settings", [:])
+        ]
+        for (screen, name, flags) in states {
+            let app = launch(flags.merging(["TGM_UI_SCREEN":screen]) { _, new in new })
+            capture(name, app: app)
+            app.terminate()
+        }
     }
 
 }

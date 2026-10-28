@@ -48,54 +48,195 @@ struct AccountsView: View {
 struct ChatsView: View {
     @ObservedObject var model: AppModel
     @State private var messageSearch = ""
-    @State private var localLabel = ""
+    @State private var showConversation = false
+
     var body: some View {
-        HSplitView {
-            VStack(spacing: 12) {
-                TextField("Search cached conversations", text: $model.chatQuery).textFieldStyle(.roundedBorder).accessibilityIdentifier("conversationSearch").onSubmit { Task { model.chatPage = 0; await model.loadChats() } }
-                Picker("Kind", selection: $model.chatKind) { ForEach(["all", "private", "group", "supergroup", "channel", "saved"], id: \.self) { Text($0.capitalized).tag($0) } }.onChange(of: model.chatKind) { _, _ in Task { model.chatPage = 0; await model.loadChats() } }
-                HStack { Button("Refresh") { model.refreshChats() }.disabled(!model.connected || model.busy); Button("Saved Messages") { model.openSavedMessages() }.disabled(!model.connected || model.busy) }
-                if model.chatRefreshCursor != nil { Button("Load Older Dialogs") { model.refreshChats(older: true) }.disabled(!model.connected || model.busy) }
-                List(model.chats) { chat in
-                    Button { model.selectChat(chat) } label: {
-                        VStack(alignment: .leading, spacing: 4) { HStack { Image(systemName: chat.kind == "private" ? "person.crop.circle" : chat.kind == "saved" ? "bookmark.circle" : "person.2.circle").foregroundStyle(.blue); Text(chat.title).font(.headline); Spacer(); if chat.data["unread_count"].int > 0 { Text(chat.data["unread_count"].int > 999 ? "999+" : String(chat.data["unread_count"].int)).font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 2).background(.blue, in: Capsule()).foregroundStyle(.white).accessibilityLabel("\(chat.data["unread_count"].int) unread messages") } }; Text(chat.lastMessage).font(.caption).foregroundStyle(.secondary).lineLimit(2); HStack { Text(chat.kind.capitalized); Spacer(); Text(displayDate(chat.data["last_date"])) }.font(.caption2).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
-                    }.buttonStyle(.plain).accessibilityIdentifier("chatRow_\(chat.id)")
-                }.overlay {
-                    if model.chats.isEmpty {
-                        ContentUnavailableView("No cached conversations", systemImage: "bubble.left.and.bubble.right", description: Text(model.chatQuery.isEmpty ? "Connect and choose Refresh to retrieve conversations." : "Try another search or conversation type."))
+        GeometryReader { geometry in
+            let wide = geometry.size.width >= 800
+            Group {
+                if wide {
+                    HStack(spacing: 0) {
+                        conversationList.frame(width: min(360, max(300, geometry.size.width * 0.32)))
+                        Divider()
+                        conversationDetail(height: geometry.size.height, compact: false)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else if showConversation && model.selectedChat != nil {
+                    conversationDetail(height: geometry.size.height, compact: true)
+                } else {
+                    conversationList
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+        }
+        .accessibilityIdentifier("chatsScreen")
+        .onAppear { showConversation = model.selectedChat != nil }
+        .onChange(of: model.selectedChat?.id) { _, id in if id != nil { showConversation = true }; messageSearch = "" }
+    }
+
+    private var conversationList: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search conversations", text: $model.chatQuery)
+                        .textFieldStyle(.plain).accessibilityIdentifier("conversationSearch")
+                        .onSubmit { Task { model.chatPage = 0; await model.loadChats() } }
+                    if !model.chatQuery.isEmpty { Button { model.chatQuery = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.secondary).help("Clear search") }
+                }.padding(9).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                HStack {
+                    Menu {
+                        Picker("Conversation type", selection: $model.chatKind) {
+                            ForEach(["all", "private", "group", "supergroup", "channel", "saved"], id: \.self) { Text($0.capitalized).tag($0) }
+                        }
+                    } label: { Label(model.chatKind == "all" ? "All conversations" : model.chatKind.capitalized, systemImage: "line.3.horizontal.decrease") }
+                    Spacer()
+                    if model.chatsLoading { ProgressView().controlSize(.small).accessibilityLabel("Loading cached conversations") }
+                    Menu {
+                        Button("Refresh Conversations") { model.refreshChats() }.disabled(!model.connected || model.busy)
+                        Button("Saved Messages") { model.openSavedMessages(); showConversation = true }.disabled(!model.connected || model.busy)
+                        if model.chatRefreshCursor != nil { Button("Load Older Dialogs") { model.refreshChats(older: true) }.disabled(!model.connected || model.busy) }
+                    } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).fixedSize().help("Conversation actions").accessibilityLabel("Conversation actions")
+                }
+            }.padding(14)
+            Divider()
+            List(selection: Binding<Int?>(get: { model.selectedChat?.id }, set: { id in
+                if let id, let chat = model.chats.first(where: { $0.id == id }) { model.selectChat(chat); showConversation = true }
+            })) {
+                ForEach(model.chats) { chat in
+                    conversationRow(chat).tag(chat.id).accessibilityIdentifier("chatRow_\(chat.id)")
+                }
+            }
+            .listStyle(.inset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityIdentifier("conversationList")
+            .overlay {
+                if model.chats.isEmpty && !model.chatsLoading {
+                    ContentUnavailableView("No conversations", systemImage: "bubble.left.and.bubble.right", description: Text(model.chatQuery.isEmpty ? "Choose Refresh in the actions menu to retrieve conversations." : "Try another search or conversation type."))
+                }
+            }
+            Divider()
+            HStack {
+                Button { model.chatPage -= 1; Task { await model.loadChats() } } label: { Image(systemName: "chevron.left") }.disabled(model.chatPage == 0 || model.chatsLoading).help("Previous page").accessibilityLabel("Previous")
+                Spacer()
+                Text("\(model.chatTotal) cached · Page \(model.chatPage + 1)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+                Button { model.chatPage += 1; Task { await model.loadChats() } } label: { Image(systemName: "chevron.right") }.disabled((model.chatPage + 1) * model.pageSize >= model.chatTotal || model.chatsLoading).help("Next page").accessibilityLabel("Next")
+            }.padding(.horizontal, 14).padding(.vertical, 10).accessibilityIdentifier("conversationPagination")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onChange(of: model.chatQuery) { _, _ in model.scheduleChatSearch() }
+        .onChange(of: model.chatKind) { _, _ in Task { model.chatPage = 0; await model.loadChats() } }
+    }
+
+    private func conversationRow(_ chat: ChatSummary) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: chat.kind == "private" ? "person.crop.circle.fill" : chat.kind == "saved" ? "bookmark.circle.fill" : "person.2.circle.fill")
+                .font(.system(size: 32)).foregroundStyle(.blue).frame(width: 36)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(chat.title).font(.body.weight(.semibold)).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if chat.data["unread_count"].int > 0 {
+                        Text(chat.data["unread_count"].int > 999 ? "999+" : String(chat.data["unread_count"].int))
+                            .font(.caption2.bold()).padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(.blue, in: Capsule()).foregroundStyle(.white)
+                            .accessibilityLabel("\(chat.data["unread_count"].int) unread messages")
                     }
                 }
-                HStack { Button("Previous") { model.chatPage -= 1; Task { await model.loadChats() } }.disabled(model.chatPage == 0); Text("\(model.chatTotal) cached").font(.caption); Button("Next") { model.chatPage += 1; Task { await model.loadChats() } }.disabled((model.chatPage + 1) * model.pageSize >= model.chatTotal) }
-            }.padding(16).frame(minWidth: 250, idealWidth: 300, maxWidth: 380)
-            if let chat = model.selectedChat {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack { VStack(alignment: .leading) { Text(chat.title).font(.title2.bold()); Text("\(chat.kind.capitalized) · \(chat.id)").font(.caption).foregroundStyle(.secondary) }; Spacer(); Button("Refresh Messages") { Task { await model.loadMessages() } }.disabled(!model.connected || model.busy) }
-                    HStack { TextField("Search Telegram messages", text: $messageSearch).textFieldStyle(.roundedBorder).onSubmit { Task { await model.loadMessages(search: messageSearch) } }; Button("Search") { Task { await model.loadMessages(search: messageSearch) } }.disabled(!model.connected || model.busy) }
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 14) {
-                            ForEach(model.chatMessages) { message in
-                                VStack(alignment: .leading, spacing: 5) {
-                                    HStack { Text(message.sender).font(.caption.bold()); Text(displayDate(message.data["date"])).font(.caption).foregroundStyle(.secondary); Spacer(); if chat.allowsPersonalSend { Button("Reply") { model.chatReply = message.id; model.invalidateChatPreview() }.buttonStyle(.borderless).disabled(model.busy) } }
-                                    Text(message.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                                    if message.hasAttachment { HStack { Label(message.data["media"]["kind"].string, systemImage: "paperclip"); Button("Save Attachment…") { model.downloadAttachment(message) }.disabled(model.busy) }.font(.caption) }
-                                }.padding(12).background(message.outgoing ? Color.blue.opacity(0.08) : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-                            }
-                            if model.hasMoreMessages { Button("Load Older Messages") { Task { await model.loadMessages(older: true) } }.disabled(!model.connected || model.busy) }
-                            if model.chatMessages.isEmpty { ContentUnavailableView("No messages loaded", systemImage: "bubble.left", description: Text("Select Refresh Messages to request Telegram history.")) }
+                Text(chat.lastMessage.isEmpty ? chat.kind.capitalized : chat.lastMessage).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                Text(displayDate(chat.data["last_date"])).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            }
+        }.padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()).help(chat.title)
+    }
+
+    @ViewBuilder private func conversationDetail(height: CGFloat, compact: Bool) -> some View {
+        if let chat = model.selectedChat {
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 10) {
+                    if compact {
+                        Button { showConversation = false } label: { Label("Conversations", systemImage: "chevron.left") }.buttonStyle(.plain).foregroundStyle(.blue).accessibilityIdentifier("backToConversations")
+                    }
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(chat.title).font(.title3.weight(.semibold)).lineLimit(2).textSelection(.enabled)
+                            Text("\(chat.kind.capitalized) · \(chat.id)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                        Spacer()
+                        if model.messagesLoading { ProgressView().controlSize(.small).accessibilityLabel("Loading messages") }
+                        Button { Task { await model.loadMessages() } } label: { Image(systemName: "arrow.clockwise") }.disabled(!model.connected || model.busy || model.messagesLoading).help("Refresh messages")
+                    }
+                    HStack(spacing: 8) {
+                        TextField("Search Telegram messages", text: $messageSearch).textFieldStyle(.roundedBorder).onSubmit { if !model.messagesLoading { Task { await model.loadMessages(search: messageSearch) } } }
+                        Button { Task { await model.loadMessages(search: messageSearch) } } label: { Image(systemName: "magnifyingglass") }.disabled(!model.connected || model.busy || model.messagesLoading).help("Search messages")
+                    }
+                }.padding(16)
+                Divider()
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        if model.hasMoreMessages { Button("Load Older Messages") { Task { await model.loadMessages(older: true) } }.disabled(!model.connected || model.busy || model.messagesLoading).frame(maxWidth: .infinity) }
+                        ForEach(model.chatMessages.sorted { $0.id < $1.id }) { message in messageRow(message, chat: chat) }
+                        if model.chatMessages.isEmpty && !model.messagesLoading { ContentUnavailableView("No messages loaded", systemImage: "bubble.left", description: Text("Use Refresh to retrieve this conversation’s history.")) }
+                    }.padding(16).frame(maxWidth: .infinity)
+                }.frame(maxWidth: .infinity, maxHeight: .infinity).accessibilityIdentifier("conversationHistory")
+                Divider()
+                if chat.allowsPersonalSend {
+                    personalComposer(chat).frame(height: min(model.chatPreview == nil ? 205 : 340, max(150, height * (model.chatPreview == nil ? 0.4 : 0.58))))
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Group messages require explicit destination approval.", systemImage: "checkmark.shield").font(.callout)
+                        Button("Open Managed Composer") { model.screen = .composer }
+                    }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).accessibilityIdentifier("conversationDetail")
+        } else {
+            ContentUnavailableView("Select a conversation", systemImage: "bubble.left.and.bubble.right", description: Text("Cached conversations appear immediately. Refresh explicitly to retrieve Telegram dialogs.")).frame(maxWidth: .infinity, maxHeight: .infinity).accessibilityIdentifier("conversationDetail")
+        }
+    }
+
+    private func messageRow(_ message: ChatMessage, chat: ChatSummary) -> some View {
+        HStack {
+            if message.outgoing { Spacer(minLength: 30) }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(message.sender).font(.caption.weight(.semibold)).lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text(displayDate(message.data["date"])).font(.caption2).foregroundStyle(.secondary)
+                    if chat.allowsPersonalSend { Button { model.chatReply = message.id; model.invalidateChatPreview() } label: { Image(systemName: "arrowshape.turn.up.left") }.buttonStyle(.borderless).disabled(model.busy).help("Reply to this message") }
+                }
+                Text(message.text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                if message.hasAttachment { HStack { Label(message.data["media"]["kind"].string, systemImage: "paperclip"); Button("Save Attachment…") { model.downloadAttachment(message) }.disabled(model.busy) }.font(.caption) }
+            }.padding(12).background(message.outgoing ? Color.blue.opacity(0.09) : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+            if !message.outgoing { Spacer(minLength: 30) }
+        }
+    }
+
+    private func personalComposer(_ chat: ChatSummary) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 9) {
+                if let reply = model.chatReply { HStack { Text("Replying to message \(reply)").font(.caption); Button("Clear Reply") { model.chatReply = nil; model.invalidateChatPreview() } } }
+                TextEditor(text: $model.chatDraft).font(.body).padding(5).frame(height: 84)
+                    .background(.background).overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                    .onChange(of: model.chatDraft) { _, _ in model.invalidateChatPreview(); model.scheduleChatDraftSave() }.accessibilityIdentifier("chatComposer")
+                HStack {
+                    Text("\(model.chatDraft.utf16.count) / 4096").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Save Draft") { model.saveChatDraft() }.disabled(model.busy)
+                    Button("Preview") { model.prepareChatPreview() }.disabled(!model.chatCanPreview)
+                }
+                if let error = ComposerValidation.error(model.chatDraft), !model.chatDraft.isEmpty { Text(error).font(.caption).foregroundStyle(.orange) }
+                if let preview = model.chatPreview {
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 9) {
+                            Text("From \(model.accountName) (\(model.accountID)) to \(chat.title) · \(chat.id)").font(.caption.weight(.medium))
+                            ScrollView { Text(preview["message"].string).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(minHeight: 40, maxHeight: 80)
+                            TextField("Type \(preview["confirmation"].string) to confirm", text: $model.chatConfirmation).textFieldStyle(.roundedBorder)
+                            Button("Send One Message") { model.sendChatConfirmed() }.disabled(!model.chatCanSend).buttonStyle(.borderedProminent)
                         }
                     }
-                    Divider()
-                    if chat.allowsPersonalSend {
-                        if let reply = model.chatReply { HStack { Text("Replying to message \(reply)").font(.caption); Button("Clear Reply") { model.chatReply = nil; model.invalidateChatPreview() } } }
-                        TextEditor(text: $model.chatDraft).font(.body).frame(minHeight: 90, maxHeight: 130).overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary)).onChange(of: model.chatDraft) { _, _ in model.invalidateChatPreview(); model.scheduleChatDraftSave() }.accessibilityIdentifier("chatComposer")
-                        HStack { Text("\(model.chatDraft.utf16.count) / 4096").font(.caption); if let error = ComposerValidation.error(model.chatDraft) { Text(error).font(.caption).foregroundStyle(.orange) }; Spacer(); Button("Save Draft") { model.saveChatDraft() }.disabled(model.busy); Button("Preview") { model.prepareChatPreview() }.disabled(!model.chatCanPreview) }
-                        if let preview = model.chatPreview {
-                            GroupBox("From \(model.accountName) (\(model.accountID)) to \(chat.title) · \(chat.id)") { VStack(alignment: .leading) { Text(preview["message"].string).textSelection(.enabled); TextField("Type \(preview["confirmation"].string) to confirm", text: $model.chatConfirmation); Button("Send One Message") { model.sendChatConfirmed() }.disabled(!model.chatCanSend).buttonStyle(.borderedProminent) } }
-                        }
-                    } else { Label("Group messages require explicit destination approval in Composer.", systemImage: "checkmark.shield"); Button("Open Managed Composer") { model.screen = .composer } }
-                }.padding(20).frame(minWidth: 420)
-            } else { ContentUnavailableView("Select a conversation", systemImage: "bubble.left.and.bubble.right", description: Text("Cached conversations appear immediately. Refresh explicitly to retrieve Telegram dialogs.")).frame(maxWidth: .infinity) }
-        }.accessibilityIdentifier("chatsScreen")
+                }
+            }.padding(14)
+        }.accessibilityIdentifier("conversationComposer")
     }
 }
 
@@ -116,20 +257,7 @@ struct DraftsView: View {
     }
 }
 
-struct ActivityView: View {
-    @ObservedObject var model: AppModel
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Activity").font(.largeTitle.bold())
-            List(Array(model.activity.enumerated()), id: \.offset) { _, item in Text(item).textSelection(.enabled) }
-                .overlay {
-                    if model.activity.isEmpty { ContentUnavailableView("No activity this session", systemImage: "waveform.path.ecg", description: Text("Discoveries, inspections and connection events appear here. Saved delivery records are in History.")) }
-                }
-        }.padding(24)
-    }
-}
-
 private func displayDate(_ value: JSONValue) -> String {
     if value.doubleValue > 0 { return Date(timeIntervalSince1970: value.doubleValue).formatted(date: .abbreviated, time: .shortened) }
-    return safeDisplay(value.string)
+    return value.string.isEmpty ? "" : readableTime(safeDisplay(value.string))
 }
