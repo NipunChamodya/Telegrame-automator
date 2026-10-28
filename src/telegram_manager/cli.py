@@ -14,6 +14,7 @@ from .terminal import print, input, json_text, TerminalOutputError
 from telethon import TelegramClient, errors
 
 from .security import private_directory
+from .messaging import import_message, validate_message
 from .error_messages import telegram_error_message
 from .setup_wizard import AUTH_CONNECTION_RETRIES, AUTH_REQUEST_RETRIES, authenticate
 from .storage import Store
@@ -37,10 +38,11 @@ def parser() -> argparse.ArgumentParser:
     discovery.add_argument('--force', action='store_true', help='With --details, bypass detail freshness once')
     pending = sub.add_parser('inspect-pending', help='Inspect missing/expired group metadata sequentially')
     pending.add_argument('--force', action='store_true')
+    pending.add_argument('--limit', type=int, default=10, help='Maximum explicit inspection batch, 1–100')
     listing = sub.add_parser("groups", help="Search the local group dashboard")
     listing.add_argument("--search", default="")
     listing.add_argument('--permission', choices=['all', 'allowed', 'denied', 'unknown'], default='all')
-    listing.add_argument('--sort', choices=['name', 'id', 'checked_at'], default='name')
+    listing.add_argument('--sort', choices=['name', 'id', 'checked_at', 'members'], default='name')
     listing.add_argument('--page', type=int, default=1)
     listing.add_argument('--page-size', type=int, default=20)
     inspect = sub.add_parser("inspect", help="Refresh and display one group's metadata")
@@ -54,17 +56,13 @@ def parser() -> argparse.ArgumentParser:
 
 def compose(path: Path | None) -> str:
     if path:
-        message = path.read_text(encoding="utf-8")
-    else:
-        print("Compose plain text. Enter a single '.' on a line to finish:")
-        lines = []
-        while (line := input()) != ".":
-            lines.append(line)
-        message = "\n".join(lines)
-    if not message.strip():
-        raise ValueError("Message must not be empty.")
-    if len(message.encode("utf-16-le")) // 2 > 4096:
-        raise ValueError("Message exceeds 4096 UTF-16 units; automatic splitting is disabled.")
+        return import_message(path)
+    print("Compose plain text. Enter a single '.' on a line to finish:")
+    lines = []
+    while (line := input()) != ".":
+        lines.append(line)
+    message = "\n".join(lines)
+    validate_message(message)
     return message
 
 
@@ -117,7 +115,7 @@ async def run(args: argparse.Namespace) -> None:
                 print(json_text(group, indent=None))
             print(f"Page {args.page}; total matches: {total}", file=sys.stderr)
         elif args.command == 'inspect-pending':
-            await inspect_pending_with_output(service, force=args.force)
+            await inspect_pending_with_output(service, force=args.force, limit=args.limit)
         elif args.command == "inspect":
             print(json_text((await service.inspect(args.destination)).data()))
         elif args.command == "history":

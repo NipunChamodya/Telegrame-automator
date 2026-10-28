@@ -7,3 +7,9 @@ __pycache__/
 *.session*
 *.sqlite3*
 .DS_Store
+macos/build/
+macos/.build/
+macos/.swiftpm/
+*.xcuserstate
+xcuserdata/
+.DerivedData/

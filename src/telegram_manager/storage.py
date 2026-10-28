@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .models import Group, now
 from .cache import CachePolicy, fresh
+from .messaging import message_units
 
 
 class DuplicateMessage(ValueError):
@@ -40,10 +41,21 @@ class Store:
                 actual = {row[1] for row in self.db.execute(f"PRAGMA table_info({table})")}
                 if not columns.issubset(actual):
                     raise sqlite3.DatabaseError("Incompatible database schema.")
-        if "sync_runs" in tables:
-            columns = {row[1] for row in self.db.execute("PRAGMA table_info(sync_runs)")}
-            if not {"account", "data"}.issubset(columns):
-                raise sqlite3.DatabaseError("Incompatible synchronization metadata table.")
+        optional_tables = {
+            'sync_runs': {'account', 'data'},
+            'drafts': {'account', 'message', 'updated_at'},
+            'approvals': {'account', 'destination', 'approved_at'},
+            'delivery_notes': {'delivery_id', 'account', 'preview', 'telegram_message_id'},
+        }
+        for table, required in optional_tables.items():
+            if table in tables:
+                columns = {row[1] for row in self.db.execute(f"PRAGMA table_info({table})")}
+                if not required.issubset(columns):
+                    raise sqlite3.DatabaseError("Incompatible optional application table; nothing was reset.")
+        for table, required in {'drafts': {'account', 'message', 'updated_at'},
+                                'approvals': {'account', 'destination', 'approved_at'}}.items():
+            if table in tables and not required.issubset({r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}):
+                raise sqlite3.DatabaseError("Incompatible application state table.")
         if "deliveries" in tables:
             unique_columns = []
             for index in self.db.execute("PRAGMA index_list(deliveries)"):
@@ -68,6 +80,14 @@ class Store:
                 account INTEGER PRIMARY KEY, until_epoch REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS sync_runs (
                 account INTEGER PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS drafts (
+                account INTEGER PRIMARY KEY, message TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS approvals (
+                account INTEGER NOT NULL, destination INTEGER NOT NULL, approved_at TEXT NOT NULL,
+                PRIMARY KEY(account,destination));
+            CREATE TABLE IF NOT EXISTS delivery_notes (
+                delivery_id INTEGER PRIMARY KEY, account INTEGER NOT NULL, preview TEXT NOT NULL,
+                telegram_message_id INTEGER);
         """)
 
     def close(self) -> None:
@@ -116,8 +136,8 @@ class Store:
         return list(self.iter_groups(account, query))  # Legacy CLI compatibility.
 
     def page(self, account: int, *, query: str = "", permission: str = "all", sort: str = "name",
-             page: int = 0, size: int = 15, policy: CachePolicy | None = None) -> tuple[list[dict], int]:
-        if permission not in {'all', 'allowed', 'denied', 'unknown'} or sort not in {'name', 'id', 'checked_at'}:
+             page: int = 0, size: int = 15, policy: CachePolicy | None = None, group_type: str = 'all') -> tuple[list[dict], int]:
+        if permission not in {'all', 'allowed', 'denied', 'unknown'} or sort not in {'name', 'id', 'checked_at', 'members'} or group_type not in {'all', 'group', 'supergroup'}:
             raise ValueError("Unsupported list filter or sort order.")
         if not 1 <= size <= 100 or page < 0:
             raise ValueError("Invalid page size or offset.")
@@ -131,7 +151,10 @@ class Store:
         if permission != 'all':
             condition += " AND effective_permission(metadata)=?"
             params.append(permission)
-        order = {'name': 'unicode_fold(name),id', 'id': 'id',
+        if group_type != 'all':
+            condition += " AND json_extract(metadata,'$.kind')=?"
+            params.append(group_type)
+        order = {'name': 'unicode_fold(name),id', 'members': "COALESCE(json_extract(metadata,'$.members'),-1) DESC,id", 'id': 'id',
                  'checked_at': "json_extract(metadata,'$.checked_at') DESC,id"}[sort]
         total = self.db.execute(f"SELECT COUNT(*) FROM groups WHERE {condition}", params).fetchone()[0]
         rows = self.db.execute(f"SELECT metadata FROM groups WHERE {condition} ORDER BY {order} LIMIT ? OFFSET ?",
@@ -172,9 +195,66 @@ class Store:
             self.db.execute("UPDATE deliveries SET status=?,detail=?,updated_at=? WHERE id=?",
                             (status, detail, now(), delivery))
 
-    def history(self, account: int) -> list[dict]:
-        return [dict(r) for r in self.db.execute(
-            "SELECT * FROM deliveries WHERE account=? ORDER BY id DESC LIMIT 100", (account,))]
+    def delivery_note(self, account: int, delivery: int, preview: str,
+                      telegram_message_id: int | None = None) -> None:
+        if not self.db.execute("SELECT 1 FROM deliveries WHERE account=? AND id=?", (account, delivery)).fetchone():
+            raise ValueError('Delivery record is not available for this account.')
+        if len(preview) > 161:
+            raise ValueError('Delivery preview is too long.')
+        with self.db:
+            self.db.execute("INSERT INTO delivery_notes VALUES (?,?,?,?) ON CONFLICT(delivery_id) DO UPDATE "
+                            "SET telegram_message_id=COALESCE(excluded.telegram_message_id,delivery_notes.telegram_message_id)",
+                            (delivery, account, preview, telegram_message_id))
+
+    def history(self, account: int, query: str = "") -> list[dict]:
+        self.db.create_function('unicode_fold', 1, lambda value: str(value or '').casefold(), deterministic=True)
+        rows = self.db.execute("SELECT d.*,g.name AS destination_name,n.preview AS message_preview,"
+                               "n.telegram_message_id FROM deliveries d LEFT JOIN groups g "
+                               "ON d.account=g.account AND d.destination=g.id LEFT JOIN delivery_notes n "
+                               "ON n.account=d.account AND n.delivery_id=d.id WHERE d.account=? AND "
+                               "(instr(unicode_fold(g.name),?)>0 OR instr(unicode_fold(n.preview),?)>0 OR "
+                               "instr(CAST(d.destination AS TEXT),?)>0 OR instr(unicode_fold(d.status),?)>0) "
+                               "ORDER BY d.id DESC LIMIT 100", (account, *([query.casefold()] * 4)))
+        return [dict(row) for row in rows]
+
+    def draft(self, account: int) -> dict:
+        row = self.db.execute("SELECT message,updated_at FROM drafts WHERE account=?", (account,)).fetchone()
+        return dict(row) if row else {'message': '', 'updated_at': None}
+
+    def save_draft(self, account: int, message: str) -> None:
+        if message_units(message) > 16384:
+            raise ValueError('Draft exceeds the 16384 UTF-16 unit storage limit.')
+        with self.db:
+            self.db.execute("INSERT INTO drafts VALUES (?,?,?) ON CONFLICT(account) DO UPDATE "
+                            "SET message=excluded.message,updated_at=excluded.updated_at",
+                            (account, message, now()))
+
+    def is_approved(self, account: int, destination: int) -> bool:
+        return self.db.execute("SELECT 1 FROM approvals WHERE account=? AND destination=?",
+                               (account, destination)).fetchone() is not None
+
+    def set_approval(self, account: int, destination: int, approved: bool) -> None:
+        if type(approved) is not bool:
+            raise ValueError('Approval must be explicitly true or false.')
+        if approved and not self.contains_group(account, destination):
+            raise ValueError('Only a discovered group can be approved.')
+        with self.db:
+            if approved:
+                self.db.execute("INSERT INTO approvals VALUES (?,?,?) ON CONFLICT(account,destination) DO NOTHING",
+                                (account, destination, now()))
+            else:
+                self.db.execute("DELETE FROM approvals WHERE account=? AND destination=?", (account, destination))
+
+    def approvals(self, account: int, query: str = "") -> list[dict]:
+        rows = self.db.execute("SELECT g.metadata,a.approved_at FROM approvals a JOIN groups g "
+                               "ON a.account=g.account AND a.destination=g.id WHERE a.account=? ORDER BY g.name",
+                               (account,))
+        result = []
+        for row in rows:
+            group = json.loads(row[0])
+            if query.casefold() in str(group).casefold():
+                result.append(group | {'approved_at': row[1]})
+        return result
 
     def cooldown(self, account: int) -> float:
         row = self.db.execute("SELECT until_epoch FROM cooldowns WHERE account=?", (account,)).fetchone()

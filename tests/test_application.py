@@ -224,7 +224,7 @@ class DashboardIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_composition_clears_destination(self):
         self.dashboard.destination = -1
-        with patch('builtins.input', return_value=''), patch('telegram_manager.dashboard.compose', return_value='new'), patch('sys.stdout', new=io.StringIO()):
+        with patch('builtins.input', return_value='1'), patch('telegram_manager.dashboard.compose', return_value='new'), patch('sys.stdout', new=io.StringIO()):
             await self.dashboard.perform('5')
         self.assertEqual(self.dashboard.message, 'new')
         self.assertIsNone(self.dashboard.destination)

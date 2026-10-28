@@ -26,6 +26,10 @@ def private_directory(path: Path) -> Path:
     return path
 
 
+class ApplicationBusy(ValueError):
+    """Another CLI/desktop backend already owns this private data directory."""
+
+
 @contextmanager
 def application_lock(root: Path) -> Iterator[None]:
     descriptor = os.open(root / "manager.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -33,7 +37,7 @@ def application_lock(root: Path) -> Iterator[None]:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise ValueError("Another manager process is running; close it first.") from None
+            raise ApplicationBusy("Another manager process is running; close it first.") from None
         yield
 
 

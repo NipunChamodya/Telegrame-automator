@@ -44,8 +44,8 @@ def print(*values, sep: str = ' ', end: str = '\n', file=None, flush: bool = Tru
         raise TerminalOutputError('Terminal output is unavailable.') from None
 
 
-def cell(value: str, width: int) -> str:
-    """Conservative display-cell truncation; retains combining/ZWJ sequences."""
+def _clusters(value: str) -> list[str]:
+    """Small conservative grapheme grouping without a heavy rendering dependency."""
     value = clean_text(value)
     clusters: list[str] = []
     for c in value:
@@ -57,10 +57,25 @@ def cell(value: str, width: int) -> str:
             clusters[-1] += c
         else:
             clusters.append(c)
+    return clusters
+
+
+def _cluster_width(cluster: str) -> int:
+    if any(ord(c) >= 0x1F000 for c in cluster) or '\ufe0f' in cluster or '\u20e3' in cluster:
+        return 2
+    return sum(2 if unicodedata.east_asian_width(c) in {'W', 'F'} else 1
+               for c in cluster if unicodedata.category(c) not in {'Mn', 'Mc', 'Me', 'Cf'})
+
+
+def display_width(value: str) -> int:
+    return sum(_cluster_width(cluster) for cluster in _clusters(value))
+
+
+def cell(value: str, width: int) -> str:
+    """Pad/truncate complete clusters, counting Indic bases and joined emoji."""
     out, used = '', 0
-    for cluster in clusters:
-        size = max((2 if unicodedata.east_asian_width(c) in {'W', 'F'} else 1
-                    for c in cluster if unicodedata.category(c) not in {'Mn', 'Me', 'Cf'}), default=0)
+    for cluster in _clusters(value):
+        size = _cluster_width(cluster)
         if used + size > width:
             return out + ' ' * max(0, width - used)
         out += cluster

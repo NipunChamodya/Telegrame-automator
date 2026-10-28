@@ -1,8 +1,26 @@
 # Telegram Group Messaging Manager
 
-A Python 3.13+ terminal application for macOS. It restores a personal Telegram session, discovers joined groups, stores permission metadata in SQLite, and sends plain text to one explicitly selected destination after approval. It never automatically sends to joined groups.
+A native macOS SwiftUI application backed by the existing Python 3.13+ CLI/service. It restores a personal Telegram session, discovers joined groups, stores permission metadata in SQLite, and sends plain text to one explicitly selected destination after approval. It never automatically sends to joined groups.
 
-## Start
+## Native desktop app
+
+The project now includes a real SwiftUI/AppKit application in `macos/TelegramManager.xcodeproj`. It manages the Python backend itself using strict local JSON-line IPC. The existing Telegram session, Keychain credentials, SQLite records and account binding are reused; no separate CLI process should be running.
+
+Build and launch the local development app:
+
+```sh
+cd ~/Desktop/TelegramManager
+./macos/build.sh
+open macos/build/Build/Products/Debug/TelegramManager.app
+```
+
+Open `macos/TelegramManager.xcodeproj` in Xcode to develop/debug. Minimum macOS is 14; native Liquid Glass is used selectively on macOS 26+. The app supports system/light/dark appearance, cached group browsing/search/filter/sort, details, controlled permission batches, multiline drafts, explicit destination approvals, one-use preview/confirmation, searchable history, and settings/backup/diagnostics.
+
+**Packaging boundary:** this is a local development build using the checkout's `.venv`. It is not yet a self-contained, signed/notarized app for another Mac. No credentials/session files are included in the bundle. See [native development and packaging](docs/DESKTOP.md), [IPC contract](docs/IPC.md), and [validation report](docs/VALIDATION.md) for exact build/test results and remaining distribution work.
+
+The CLI remains available for maintenance:
+
+## Start the CLI
 
 From the project directory:
 
@@ -148,7 +166,7 @@ Sinhala, Tamil, English, combining marks and emoji/ZWJ sequences remain unchange
 
 Original `groups`, `deliveries`, and `cooldowns` definitions and records remain unchanged. One additive `sync_runs(account PRIMARY KEY, data TEXT)` table stores account-isolated scan counters/state and the previous basic scan. `CREATE TABLE IF NOT EXISTS` is an atomic, idempotent additive upgrade; it never rebuilds the database or deletes records. WAL remains enabled. Basic group upsert and scan progress share one short transaction. UPSERT replaces `INSERT OR REPLACE`, avoids delete/insert semantics and skips identical payload updates. Primary-key lookups replace loading all groups to check a destination. Lists decode a bounded page; aggregates and pending inspections stream records. Python retains only compact seen IDs for scan deduplication, not all dialog/metadata objects. Existing account indexes are sufficient; no speculative indexes were added.
 
-An offline 32-basic-group comparison against repository baseline `9917c95` measured **96 → 0 mocked per-group API-boundary calls** for the default scan (`get_entity`, `get_permissions`, raw full-chat calls; dialog paging excluded). SQLite commits were **64 → 34**, including new persisted progress. The first explicit detail pass made 64 boundary calls (entity + full-chat per basic group), and a second fresh-cache pass made **0**. These are operation counts, not live network throughput, memory-use or elapsed-time claims. No M2/8 GB performance benchmark or live Telegram load test was performed.
+An offline 32-basic-group comparison against repository baseline `9917c95` measured **96 → 0 mocked per-group API-boundary calls** for the default scan (`get_entity`, `get_permissions`, raw full-chat calls; dialog paging excluded). SQLite commits were **64 → 34**, including new persisted progress. The prior benchmark’s explicit 32-group detail pass made 64 boundary calls (entity + full-chat per basic group), and a second fresh-cache pass made **0**. These are operation counts, not live network throughput, memory-use or elapsed-time claims. No M2/8 GB performance benchmark or live Telegram load test was performed.
 
 ## Sanitized development diagnostics
 
@@ -162,9 +180,9 @@ Normal mode reports only the error class. Development mode adds package-relative
 
 ## Compose and send safely
 
-Use option **5** to compose plain text or load a UTF-8 file. For interactive input, enter a single `.` on its own line to finish. The preview shows the complete draft. Empty messages and messages over 4096 UTF-16 units are rejected; messages are not automatically split.
+Use option **5** to compose plain text or load a UTF-8 file. Choose **1. Compose directly**, **2. Import UTF-8 file**, or **0. Cancel**. Typed message text is never interpreted as a filename. For direct multiline input, enter a single `.` on its own line to finish. The preview shows the complete draft. Empty messages and messages over 4096 UTF-16 units are rejected; messages are not automatically split.
 
-Use option **6** to enter a discovered group's exact ID, inspect its fresh permissions, and explicitly select it. “Approved destinations” means one destination selected in memory; it does **not** authorize a send. Replacing the draft clears the destination selection. Drafts and selections are not saved across launches.
+Use option **6** to select a discovered group by exact ID, a visible page index, or search, inspect its fresh permissions, and explicitly select it. The current CLI send destination is selected in memory; persistent destination approval does **not** authorize a send. Replacing the draft clears the destination selection. Drafts and explicit destination approvals are account-isolated in the private database. A message's exact send confirmation is never persistent or standing approval. GUI preview tokens are short-lived and single use.
 
 Use option **7** to verify account authorization, recheck permissions, and display the exact destination, account ID and complete message. Type the displayed `SEND <destination-id>` phrase to approve. Any other response cancels. The service checks authorization, account identity, permissions and slow mode again immediately before delivery. Selection is cleared before submission so it cannot act as standing approval.
 
@@ -204,13 +222,13 @@ The default directory is unchanged:
 
 Keychain contains one generic-password item named `org.telegram-group-manager.credentials.<directory-hash>`, with your macOS user ID as its account field. Native calls are tested with mocked framework functions; actual Keychain access still needs a controlled macOS smoke test.
 
-SQLite is checked for integrity, expected tables/columns and its delivery deduplication index before normal initialization. Existing tables are not dropped, records are not deleted, and incompatible or corrupt databases are rejected instead of reset. If a bound installation loses its database file, startup requires backup recovery rather than creating an empty delivery ledger. The original tables are retained; only the additive `sync_runs` status table is initialized. The upgrade is idempotent and tested against the prior schema. It is not a general future schema migration framework.
+SQLite is checked for integrity, expected tables/columns and its delivery deduplication index before normal initialization. Existing tables are not dropped, records are not deleted, and incompatible or corrupt databases are rejected instead of reset. If a bound installation loses its database file, startup requires backup recovery rather than creating an empty delivery ledger. The original tables are retained; additive `sync_runs`, `drafts`, `approvals` and `delivery_notes` tables are initialized idempotently. The upgrade is idempotent and tested against the prior schema. It is not a general future schema migration framework.
 
 Logging emits sanitized JSON error events with error class names, excluding API hashes, session contents, verification codes, passwords and message bodies. The explicit preview displays your composed message, so avoid screen sharing sensitive content. There is no remote telemetry. FileVault and a locked macOS account protect the session and unencrypted local metadata at rest; filesystem modes alone do not encrypt them. Python cannot guarantee zeroing secrets in process memory.
 
 ## Delivery history and duplicate prevention
 
-Option 8 / `tgm history` shows the latest 100 delivery records for the connected account. The ledger stores account, destination, SHA-256 of the exact message, Telegram random ID, timestamps, status and a sanitized result, not the message body.
+Option 8 / `tgm history` shows the latest 100 delivery records for the connected account. The ledger stores account, destination, SHA-256 of the exact message, Telegram random ID, timestamps, status and a sanitized result, not a full historical message body. New desktop-era deliveries also retain a sanitized prefix (up to 160 characters plus an ellipsis) in a separate private table for history; drafts persist their full text when explicitly saved. These fields are sensitive plaintext in the private database. Legacy records remain unchanged and may have no preview or Telegram message ID.
 
 A unique `(account, destination, message hash)` reservation is committed **before** submission. Exact duplicate text to the same destination is blocked across restarts for every status, including failed attempts. There is no retry/override button. Telegram random IDs provide an additional server deduplication mechanism. A process lock prevents concurrent instances using the same directory.
 
@@ -266,9 +284,9 @@ Install development dependencies only into the project environment:
 
 Tests mock all Telegram network operations and Keychain framework calls. They must never send real messages. The suites cover dependency setup and cancellation, first-run/existing configuration, account mismatch, interrupted initialization, permission errors, database creation and preservation, atomic duplicate protection, session restoration and 2FA, dashboard views, explicit approval, permission changes, and rate limits.
 
-Validation in the current environment (Python 3.13.4, Telethon 1.45.0): **129 tests passed**, with no skipped modules. Syntax checks pass. All Telegram network interactions in tests are mocked. Coverage includes Sinhala/Tamil/emoji output and storage, control sanitization, ASCII-terminal fallback, JSON previews, lightweight request counts, two-phase inspection, separate cache lifetimes, partial recovery, cooldown persistence, request/output BrokenPipeError separation, legacy database upgrades, no-op upserts, account isolation, pagination/filtering, dashboard statistics, session restoration and existing sending safety.
+Validation in the current environment (Python 3.13.4, Telethon 1.45.0): **172 tests and 54 subtests passed**, with no skipped modules. Syntax checks pass. All Telegram network interactions in tests are mocked. Coverage includes Sinhala/Tamil/emoji output and storage, control sanitization, ASCII-terminal fallback, JSON previews, lightweight request counts, two-phase inspection, separate cache lifetimes, partial recovery, cooldown persistence, request/output BrokenPipeError separation, legacy database upgrades, no-op upserts, account isolation, pagination/filtering, dashboard statistics, session restoration and existing sending safety.
 
-The real `python3 main.py` startup is checked with an isolated temporary directory and cancelled at the welcome prompt before credentials or Telegram contact. Full startup/session restoration and the dashboard are exercised with mocks. No live Telegram operation, send, Keychain modification or browser opening was performed for this upgrade. The previous live discovery/connection results are user-reported, not re-verified here. Ruff is unavailable in the current virtual environment, so lint remains unverified. Run it after installing the declared dev dependencies. No GUI or heavy rendering dependency was added.
+The real `python3 main.py` startup is checked with an isolated temporary directory and cancelled at the welcome prompt before credentials or Telegram contact. Full startup/session restoration and the dashboard are exercised with mocks. No live Telegram operation, send, Keychain modification or browser opening was performed for this upgrade. The previous live discovery/connection results are user-reported, not re-verified here. Ruff is unavailable in the current virtual environment, so lint remains unverified. Run it after installing the declared dev dependencies. No Python GUI framework or heavy rendering dependency was added. The native SwiftUI target builds in Debug and Release; 17 Swift tests pass. Interactive window launch remains unverified in this managed environment; see the validation report for the observed launch failures.
 
 ## API references
 

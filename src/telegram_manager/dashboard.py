@@ -1,5 +1,6 @@
-"""Small terminal dashboard. Drafts and destination selection live only in memory."""
+"""Terminal dashboard with private drafts and explicit per-send selection."""
 import logging
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -13,7 +14,8 @@ from .error_messages import telegram_error_message
 from .guidance import show_help
 from .setup_wizard import authenticate, yes
 from .telegram import discover_with_output, inspect_pending_with_output
-from .terminal import TerminalOutputError, cell, clean_text, input, json_text, print, width
+from .terminal import TerminalOutputError, cell, clean_text, display_width, input, json_text, print, width
+from .messaging import message_units
 
 
 def display(value) -> None:
@@ -24,8 +26,10 @@ def display(value) -> None:
 class Dashboard:
     def __init__(self, service, root: Path, source: str):
         self.service, self.root, self.source = service, root, source
-        self.message: str | None = None
+        saved = service.store.draft(service.me.id)
+        self.message: str | None = saved['message'] or None
         self.destination: int | None = None
+        self.visible_groups: list[int] = []
 
     def require_ready(self) -> None:
         remaining = max(0, int(self.service.store.cooldown(self.service.me.id) - time.time() + 0.999))
@@ -85,9 +89,11 @@ class Dashboard:
             columns = width()
             print(f"Groups — page {page + 1}/{max(1, (total + 9) // 10)}; matches: {total}; filter: {permission}")
             print('GROUP / TELEGRAM ID / POSTING STATUS')
-            for group in rows:
+            self.visible_groups = [group['id'] for group in rows]
+            name_width = max(8, min(38, columns - 16, max((display_width(g['name']) for g in rows), default=8)))
+            for index, group in enumerate(rows, 1):
                 status = policy.permission(group).capitalize()
-                print(cell(clean_text(group['name']), max(6, columns - 12)) + ' ' + status)
+                print(f"#{index:<2} " + cell(clean_text(group['name']), name_width) + ' ' + status)
                 print(f"  ID: {group['id']}")
                 stamp = group.get('permissions_checked_at') or 'not inspected'
                 print(cell(f"  Permissions checked: {stamp}", columns))
@@ -101,22 +107,49 @@ class Dashboard:
                 if selected in {'all', 'allowed', 'denied', 'unknown'}:
                     permission, page = selected, 0
             elif command == 's':
-                selected = input('name / id / checked_at: ').strip().lower()
-                if selected in {'name', 'id', 'checked_at'}:
+                selected = input('name / id / members / checked_at: ').strip().lower()
+                if selected in {'name', 'id', 'members', 'checked_at'}:
                     sort, page = selected, 0
             else:
                 return
 
+    def read_selection(self, prompt: str = "Group ID or #visible index (Enter cancels; /text searches): ") -> int | None:
+        while True:
+            value = input(prompt).strip()
+            if not value or value.casefold() in {'q', 'cancel'}:
+                print("Selection cancelled.")
+                return None
+            if value.startswith('/'):
+                self.view_groups(value[1:])
+                continue
+            if value.casefold() == 'all':
+                raise ValueError("Select one group by its Telegram ID or visible #index. 'all' never authorizes a batch.")
+            if value.startswith('#') or value.isascii() and value.isdecimal():
+                index_text = value.removeprefix('#')
+                if not index_text.isascii() or not index_text.isdecimal() or len(index_text) > 6 or not 1 <= int(index_text) <= len(self.visible_groups):
+                    raise ValueError("That visible index is unavailable. Open or search the group list first, then choose its #index.")
+                destination = self.visible_groups[int(index_text) - 1]
+            elif re.fullmatch(r'-[0-9]{1,19}', value):
+                destination = int(value)
+                if destination < -(2 ** 63):
+                    raise ValueError("Enter a valid Telegram group ID from the group list.")
+            else:
+                raise ValueError("Enter one Telegram group ID, a visible #index, or /text to search.")
+            if not self.service.store.contains_group(self.service.me.id, destination):
+                raise ValueError("That group is not available for this account. Discover groups or search the cached list first.")
+            return destination
+
     async def select(self) -> None:
         self.require_ready()
-        destination = int(input("Exact group ID to select: ").strip())
-        if not self.service.store.contains_group(self.service.me.id, destination):
-            raise ValueError("Select a discovered group; refresh the dashboard first.")
+        destination = self.read_selection()
+        if destination is None:
+            return
         group = await self.service.inspect(destination)
         display(group.data())
         if group.permission != "allowed":
             raise ValueError("Destination selection blocked: posting permission is not allowed.")
-        if yes("Select this one destination for a later message confirmation?"):
+        if yes("Approve this one destination and select it for a later send confirmation?"):
+            self.service.store.set_approval(self.service.me.id, destination, True)
             self.destination = destination
         print("Destination selection does not authorize a send.")
 
@@ -153,18 +186,29 @@ class Dashboard:
                 self.view_groups(query)
             elif choice == "4":
                 self.require_ready()
-                destination = int(input("Group ID: "))
-                if not store.contains_group(account, destination):
-                    raise ValueError("Choose a discovered group.")
-                display((await self.service.inspect(destination)).data())
+                destination = self.read_selection()
+                if destination is not None:
+                    display((await self.service.inspect(destination)).data())
             elif choice == "5":
-                path = input("UTF-8 message file path, or Enter to compose: ").strip()
+                print("1. Compose message directly\n2. Import a UTF-8 text file\n0. Cancel")
+                mode = input("Choose composition mode: ").strip()
+                if mode in {'0', ''}:
+                    print("Composition cancelled; existing draft retained.")
+                    return
+                if mode not in {'1', '2'}:
+                    raise ValueError("Choose 1 to type a message, 2 to import a file, or 0 to cancel.")
+                path = input("UTF-8 file path: ").strip() if mode == '2' else None
+                if mode == '2' and not path:
+                    print("Import cancelled; existing draft retained.")
+                    return
                 message = compose(Path(path).expanduser() if path else None)
+                store.save_draft(account, message)
                 self.message, self.destination = message, None
-                display({"message": message, "utf16_units": len(message.encode('utf-16-le')) // 2})
-                print("Draft replaced; select a destination with option 6.")
+                display({"message": message, "utf16_units": message_units(message)})
+                print("Draft saved; select a destination with option 6. Sending still requires exact confirmation.")
             elif choice == "6":
-                display({"selected_destination": self.destination, "send_approval": "required for each send"})
+                display({"selected_destination": self.destination, "approved_groups": store.approvals(account),
+                         "send_approval": "required for each send"})
                 if yes("Select or change the destination?"):
                     await self.select()
             elif choice == "7":
@@ -179,12 +223,15 @@ class Dashboard:
                 display({"data_directory": str(self.root), "credentials": self.source,
                          "cache_policy_seconds": vars(getattr(self.service, 'policy', CachePolicy())), "automatic_send": False,
                          "credential_changes": "Use environment overrides or macOS Keychain Access; no automatic overwrites.",
-                         "drafts": "Memory only; replacing a draft clears destination selection."})
+                         "drafts": "Private account-isolated storage; replacing a draft clears destination selection."})
             elif choice == "11":
                 show_help()
             elif choice == "12":
                 self.require_ready()
-                await inspect_pending_with_output(self.service)
+                value = input("Maximum groups to inspect now (1–100, default 10): ").strip() or '10'
+                if not value.isascii() or not value.isdecimal() or not 1 <= int(value) <= 100:
+                    raise ValueError("Inspection limit must be an integer from 1 to 100.")
+                await inspect_pending_with_output(self.service, limit=int(value))
             else:
                 print("Choose one of the displayed menu numbers.")
         except (errors.FloodWaitError, errors.SlowModeWaitError) as exc:

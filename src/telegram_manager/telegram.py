@@ -343,11 +343,16 @@ class TelegramService:
         return report.processed
 
     async def _inspect_pending(self, report: ScanReport, *, force: bool, current_scan: bool = False,
-                               on_inspected: Callable[[int, Group, bool], None] | None = None) -> None:
+                               on_inspected: Callable[[int, Group, bool], None] | None = None,
+                               limit: int = 10, destinations: list[int] | None = None) -> None:
         report.phase = "details"
         # Cursor iteration is bounded in Python memory. Each group is committed
         # independently; cached records not seen in this scan are never deleted.
+        attempted = 0
+        selected = set(destinations) if destinations is not None else None
         for index, data in enumerate(self.store.iter_groups(self.me.id), 1):
+            if selected is not None and data['id'] not in selected:
+                continue
             if current_scan and data.get("discovered_at") != report.started_at:
                 continue
             if not force and (not self.policy.inspection_due(data) or data.get('membership') == 'inaccessible'
@@ -356,6 +361,9 @@ class TelegramService:
                 if on_inspected:
                     on_inspected(index, Group.from_data(data), True)
                 continue
+            if attempted >= limit:
+                break
+            attempted += 1
             try:
                 group = await self.inspect(data['id'], force=force)
                 report.inspected += 1
@@ -374,14 +382,25 @@ class TelegramService:
                 on_inspected(index, group, False)
 
     async def inspect_pending(self, *, force: bool = False,
-                              on_inspected: Callable[[int, Group, bool], None] | None = None) -> int:
+                              on_inspected: Callable[[int, Group, bool], None] | None = None,
+                              limit: int = 10, destinations: list[int] | None = None) -> int:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("Inspection limit must be an integer from 1 to 100.")
+        if destinations is not None:
+            if not isinstance(destinations, list) or len(destinations) > limit or not destinations:
+                raise ValueError("Choose between 1 and the batch limit of explicit group IDs.")
+            if any(type(destination) is not int or not -(2 ** 63) <= destination < 2 ** 63
+                   or not self.store.contains_group(self.me.id, destination)
+                   for destination in destinations) or len(set(destinations)) != len(destinations):
+                raise ValueError("Choose unique discovered group IDs belonging to this account.")
         self.require_ready()
         prior = self.store.scan(self.me.id)
         last_basic = prior if prior.get('kind', 'discovery') == 'discovery' else prior.get('last_basic')
         report = self.report = ScanReport(phase="details", kind="details", last_basic=last_basic)
         self.store.save_scan(self.me.id, report.data())
         try:
-            await self._inspect_pending(report, force=force, on_inspected=on_inspected)
+            await self._inspect_pending(report, force=force, on_inspected=on_inspected,
+                                        limit=limit, destinations=destinations)
             report.state = "completed"
         except WAITS:
             report.state = "cooldown"
@@ -424,9 +443,12 @@ class TelegramService:
         if group.slowmode_next_send and group.slowmode_next_send > time.time():
             raise ValueError("Telegram slow mode is active; wait until the next permitted send.")
         delivery, random_id = self.store.reserve(self.me.id, destination, message)
+        preview = clean_text(' '.join(message.splitlines()))
+        preview = preview[:160] + ('…' if len(preview) > 160 else '')
+        self.store.delivery_note(self.me.id, delivery, preview)
         try:
             peer = await self.client.get_input_entity(destination)
-            await self.client(functions.messages.SendMessageRequest(
+            response = await self.client(functions.messages.SendMessageRequest(
                 peer=peer, message=message, random_id=random_id, no_webpage=True))
         except (errors.FloodWaitError, errors.SlowModeWaitError) as exc:
             self.store.set_cooldown(self.me.id, time.time() + exc.seconds)
@@ -442,6 +464,16 @@ class TelegramService:
             self.store.finish(delivery, "uncertain", "Interrupted or transport failure; inspect Telegram manually.")
             raise
         self.store.finish(delivery, "sent", "Telegram acknowledged the send request.")
+        message_id = getattr(response, 'id', None)
+        if type(message_id) is not int:
+            updates = getattr(response, 'updates', None)
+            message_id = next((u.id for u in (updates if isinstance(updates, list) else [])
+                               if isinstance(u, types.UpdateMessageID) and u.random_id == random_id), None)
+        if message_id is not None:
+            try:
+                self.store.delivery_note(self.me.id, delivery, preview, message_id)
+            except sqlite3.Error:
+                LOG.error('DeliveryNoteUpdateFailed')
         return "Sent; delivery recorded."
 
 
@@ -481,10 +513,10 @@ def inspection_progress(index: int, group: Group, skipped: bool) -> None:
     print(f"[Details {index}] {clean_text(group.name)} — {status}", flush=True)
 
 
-async def inspect_pending_with_output(service: TelegramService, *, force: bool = False) -> int:
+async def inspect_pending_with_output(service: TelegramService, *, force: bool = False, limit: int = 10) -> int:
     print("Inspecting metadata sequentially...", flush=True)
     try:
-        count = await service.inspect_pending(force=force, on_inspected=inspection_progress)
+        count = await service.inspect_pending(force=force, on_inspected=inspection_progress, limit=limit)
     except WAITS as exc:
         report = service.store.scan(service.me.id)
         print(f"Telegram requested a {exc.seconds}-second cooldown. Metadata inspection paused safely; "
