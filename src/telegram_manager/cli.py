@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import getpass
 import fcntl
 import json
 import logging
@@ -13,6 +12,8 @@ from pathlib import Path
 from telethon import TelegramClient, errors
 
 from .security import private_directory
+from .error_messages import telegram_error_message
+from .setup_wizard import AUTH_CONNECTION_RETRIES, AUTH_REQUEST_RETRIES, authenticate
 from .storage import Store
 from .telegram import TelegramService
 
@@ -71,18 +72,20 @@ async def run(args: argparse.Namespace) -> None:
         raise ValueError("Another manager process is running; close it first.") from None
     store = Store(root / "manager.sqlite3")
     client = TelegramClient(str(root / "account"), int(api_id), api_hash,
-                            flood_sleep_threshold=0, request_retries=0,
-                            connection_retries=0, auto_reconnect=False,
+                            flood_sleep_threshold=0,
+                            request_retries=AUTH_REQUEST_RETRIES if args.command == "login" else 0,
+                            connection_retries=AUTH_CONNECTION_RETRIES if args.command == "login" else 0,
+                            auto_reconnect=False,
                             raise_last_call_error=True)
     me = None
     try:
+        if args.command == "login" and store.cooldown(0) > time.time():
+            raise ValueError("Authentication cooldown is active; wait before requesting another login code.")
         await client.connect()
         if args.command == "login":
             if not sys.stdin.isatty():
                 raise ValueError("Login requires an interactive terminal.")
-            await client.start(phone=lambda: getpass.getpass("Phone number (hidden): "),
-                               code_callback=lambda: getpass.getpass("Telegram login code (hidden): "),
-                               password=lambda: getpass.getpass("Telegram 2FA password: "))
+            me = await authenticate(client)
             print("Authenticated. Session saved in the private application directory.")
             return
         if not await client.is_user_authorized():
@@ -121,8 +124,7 @@ async def run(args: argparse.Namespace) -> None:
                 return
             print(await service.send(args.destination, message))
     except (errors.FloodWaitError, errors.SlowModeWaitError) as exc:
-        if me:
-            store.set_cooldown(me.id, time.time() + exc.seconds)
+        store.set_cooldown(me.id if me else 0, time.time() + exc.seconds)
         raise ValueError(f"Telegram requires a wait of {exc.seconds} seconds. No retry attempted.") from None
     finally:
         await client.disconnect()
@@ -146,7 +148,7 @@ def main() -> None:
         raise SystemExit(1) from None
     except errors.RPCError as exc:
         LOG.error(type(exc).__name__)
-        print(f"Telegram error: {type(exc).__name__}. No automatic retry.", file=sys.stderr)
+        print(telegram_error_message(exc), file=sys.stderr)
         raise SystemExit(1) from None
     except Exception as exc:
         LOG.error(type(exc).__name__)

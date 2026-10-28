@@ -3,12 +3,21 @@ from telethon import errors
 
 
 def telegram_error_message(exc: errors.RPCError) -> str:
+    if isinstance(exc, (errors.PhoneMigrateError, errors.NetworkMigrateError, errors.UserMigrateError)):
+        return ("Telegram requested another data center, but authentication could not finish within "
+                "the bounded migration attempts. The session was preserved. Check your connection "
+                "and relaunch; do not delete the session or change its database manually.")
+    if isinstance(exc, errors.SessionPasswordNeededError):
+        return ("Telegram requires your two-step verification password to finish signing in. "
+                "Use your Telegram account password, not your API Hash or login code.")
     if isinstance(exc, errors.ApiIdInvalidError):
         return ("Telegram did not accept the API ID/API Hash pair. Check both on my.telegram.org "
                 "under API development tools. Correct the environment variables or review the saved "
                 "item in macOS Keychain Access, then relaunch.")
     if isinstance(exc, errors.PhoneNumberInvalidError):
-        return "Telegram did not accept the phone number. Relaunch and enter it with its country code, starting with +."
+        return ("Telegram did not accept the phone number. Enter it again with + and its country code. "
+                "For Sri Lanka: +947XXXXXXXX, replacing X with digits and omitting the domestic leading 0. "
+                "Your input was not displayed or logged.")
     if isinstance(exc, errors.PhoneNumberBannedError):
         return "Telegram reports this phone number is banned. Review the account with Telegram; the app cannot bypass a ban."
     if isinstance(exc, (errors.PhoneCodeInvalidError, errors.PhoneCodeEmptyError)):

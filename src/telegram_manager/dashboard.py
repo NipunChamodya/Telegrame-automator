@@ -82,7 +82,7 @@ class Dashboard:
         if self.message is None or self.destination is None:
             raise ValueError("Compose a message (5) and select a destination (6) first.")
         self.require_ready()
-        me = await authenticate(self.service.client)
+        me = await authenticate(self.service.client, allow_login=False)
         if me.id != self.service.me.id:
             self.destination = None
             raise ValueError("Account identity changed; restart with the matching session.")

@@ -95,7 +95,7 @@ class StartupIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(load_configuration(self.root)['account_id'], 11)
         self.assertTrue((self.root / 'manager.sqlite3').exists())
         self.started[-2].return_value.run.assert_awaited_once()
-        self.client.disconnect.assert_awaited_once()
+        self.assertEqual(self.client.disconnect.await_count, 2)
 
     async def test_existing_startup_keeps_session_and_records(self):
         bind_account(self.root, load_configuration(self.root), 11)

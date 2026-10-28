@@ -14,7 +14,9 @@ from .dashboard import Dashboard
 from .error_messages import telegram_error_message
 from .guidance import setup_completed, welcome
 from .security import application_lock, private_directory
-from .setup_wizard import authenticate, credential_wizard, yes
+from .setup_wizard import (
+    AUTH_CONNECTION_RETRIES, AUTH_REQUEST_RETRIES, authenticate, credential_wizard, yes,
+)
 from .storage import Store
 from .telegram import TelegramService
 
@@ -44,8 +46,9 @@ async def startup() -> None:
                 raise ValueError("Authentication cooldown is active; wait before relaunching.")
             credentials, source = credential_wizard(root)
             client = TelegramClient(str(root / "account"), credentials.api_id, credentials.api_hash,
-                                    flood_sleep_threshold=0, request_retries=0,
-                                    connection_retries=0, auto_reconnect=False,
+                                    flood_sleep_threshold=0, request_retries=AUTH_REQUEST_RETRIES,
+                                    connection_retries=AUTH_CONNECTION_RETRIES, auto_reconnect=False,
+                                    receive_updates=False,
                                     raise_last_call_error=True)
             await client.connect()
             me = await authenticate(client)
@@ -55,6 +58,21 @@ async def startup() -> None:
                     print("Setup cancelled. Existing data was preserved.")
                     return
             bind_account(root, config, me.id)
+            # Retry budgets are constructor options. Reopen the SAME saved session
+            # sequentially with zero request retries before any group or send work.
+            # No private Telethon attributes or session database edits are needed.
+            await client.disconnect()
+            client = None
+            client = TelegramClient(str(root / "account"), credentials.api_id, credentials.api_hash,
+                                    flood_sleep_threshold=0, request_retries=0,
+                                    connection_retries=0, auto_reconnect=False,
+                                    raise_last_call_error=True)
+            await client.connect()
+            restored = await authenticate(client, allow_login=False)
+            if restored.id != me.id:
+                raise ValueError("Account identity changed while restoring the authenticated session. "
+                                 "No dashboard or message operation was started.")
+            me = restored
             if first_run:
                 setup_completed()
             else:
@@ -79,6 +97,11 @@ def main() -> None:
     handler.setFormatter(JsonFormatter())
     LOG.addHandler(handler)
     LOG.setLevel(logging.INFO)
+    auth_log = logging.getLogger("telegram_manager.authentication")
+    auth_log.handlers.clear()
+    auth_log.addHandler(handler)
+    auth_log.setLevel(logging.INFO)
+    auth_log.propagate = False
     logging.getLogger("telethon").setLevel(logging.CRITICAL)
     try:
         asyncio.run(startup())

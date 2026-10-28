@@ -156,7 +156,7 @@ if importlib.util.find_spec('telethon') is not None:
 
         async def test_wrong_2fa_stops_without_retry(self):
             client = AsyncMock()
-            client.is_user_authorized.return_value = False
+            client.is_user_authorized.side_effect = [False, True]
             client.send_code_request.return_value = NS(phone_code_hash='opaque')
             client.sign_in.side_effect = [errors.SessionPasswordNeededError(None), errors.PasswordHashInvalidError(None)]
             with patch('telegram_manager.setup_wizard.hidden', side_effect=['+123456789', 'code', 'private-test-password']), \
@@ -210,7 +210,7 @@ if importlib.util.find_spec('telethon') is not None:
     class MainEntryPointTests(unittest.TestCase):
         def test_main_first_run_and_restoration_reach_dashboard(self):
             client = AsyncMock()
-            client.is_user_authorized.return_value = False
+            client.is_user_authorized.side_effect = [False, True]
             client.send_code_request.return_value = NS(phone_code_hash='opaque')
             client.sign_in.side_effect = [errors.SessionPasswordNeededError(None), None]
             client.get_me.return_value = NS(id=1234, bot=False, deleted=False)
@@ -232,7 +232,8 @@ if importlib.util.find_spec('telethon') is not None:
                 self.assertNotIn('private-2fa', output.getvalue())
                 self.assertEqual(load_configuration(Path(directory))['account_id'], 1234)
                 browser.assert_not_called()
-                factory.assert_called_once()
+                self.assertEqual(factory.call_count, 2)
+                self.assertEqual([call.kwargs['request_retries'] for call in factory.call_args_list], [3, 0])
                 self.assertEqual(factory.call_args.args[0], str(Path(directory) / 'account'))
                 client.send_message.assert_not_awaited()
                 client.assert_not_called()  # No low-level message request, including from Help.
@@ -245,6 +246,7 @@ if importlib.util.find_spec('telethon') is not None:
                 (Path(directory) / 'account.session').write_bytes(b'existing-session-fixture')
                 client.reset_mock()
                 client.is_user_authorized.return_value = True
+                client.is_user_authorized.side_effect = None
                 with patch('telegram_manager.setup_wizard.resolve_credentials', return_value=(Credentials(123, 'a' * 32), 'macOS Keychain')), \
                         patch('telegram_manager.setup_wizard.hidden') as hidden, \
                         patch('builtins.input', side_effect=['0']), patch('sys.stdout', new=io.StringIO()) as restored:

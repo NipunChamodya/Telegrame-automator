@@ -74,7 +74,10 @@ def show_help() -> None:
     print("\nHELP — TELEGRAM GROUP MANAGER")
     api_tutorial()
     print("TELEGRAM AUTHENTICATION AND RECONNECTING\n"
-          "  Enter your phone number with its country code. Telegram chooses how\n"
+          "  Enter your phone number with its country code: for Sri Lanka use\n"
+          "  +947XXXXXXXX (replace X with digits; omit the domestic leading 0).\n"
+          "  Spaces, hyphens and parentheses are accepted; invalid input can be\n"
+          "  corrected at the prompt. Telegram chooses how\n"
           "  to deliver the login code; check the verified Telegram service chat\n"
           "  in an already signed-in Telegram app first. SMS or another method\n"
           "  may be offered by Telegram, but is not guaranteed.\n"
