@@ -25,6 +25,14 @@
 > [!IMPORTANT]
 > **V3 · v0.4.0 · Development preview.** The native app and its backend compile and pass automated tests, but complete interactive UI acceptance is **not yet verified**. Builds currently depend on this repository's Python virtual environment. **No standalone installer or production-ready release is available.** See [validation evidence](docs/VALIDATION.md).
 
+## V4 media development update
+
+This checkout adds native media viewing, bounded account-scoped transfers,
+Save As, pause/resume, and a conservative supported timed-media lifecycle.
+See the [implemented media contract](docs/V4_MEDIA.md) and
+[V4 validation and UX report](docs/V4_REPORT.md). The V3 results below are
+historical; V4 does not claim live Telegram or standalone distribution acceptance.
+
 ## One app. Two ways to work.
 
 **Talk naturally. Manage intentionally.**

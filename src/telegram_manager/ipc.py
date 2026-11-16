@@ -32,6 +32,7 @@ from .accounts import AccountRegistry, LEGACY, ProfileError
 from .chat_features import ChatFeatures
 from .client_features import ClientFeatures
 from .media_preview import MediaPreview
+from .media_transfers import MediaTransfers
 from .conversation_actions import ConversationActions
 from .update_pipeline import UpdatePipeline
 from . import __version__
@@ -128,7 +129,7 @@ class Backend:
                'draft.save', 'approval.set', 'storage.backup', 'diagnostics.export', 'settings.update',
                'accounts.add', 'accounts.switch', 'accounts.disconnect', 'accounts.logout',
                'accounts.remove', 'accounts.archive', 'accounts.restore'} | ChatFeatures.NETWORK | UpdatePipeline.NETWORK | ConversationActions.NETWORK | ClientFeatures.NETWORK | MediaPreview.NETWORK
-    METHODS = NETWORK | {'health', 'status', 'settings', 'groups', 'detail', 'draft.get',
+    METHODS = NETWORK | MediaTransfers.METHODS | {'health', 'status', 'settings', 'groups', 'detail', 'draft.get',
                          'approvals', 'history', 'cancel', 'shutdown', 'accounts.list'} | ChatFeatures.METHODS | UpdatePipeline.METHODS | ConversationActions.METHODS | ClientFeatures.METHODS | MediaPreview.METHODS
     ALIASES = {'groups.list': 'groups', 'groups.get': 'detail', 'destinations.list': 'approvals'}
 
@@ -170,6 +171,7 @@ class Backend:
         self.actions = ConversationActions(self)
         self.features = ClientFeatures(self)
         self.media = MediaPreview(self)
+        self.transfers = MediaTransfers(self)
 
     @staticmethod
     def _validate_preferences(p: dict) -> None:
@@ -216,12 +218,14 @@ class Backend:
             await pipeline.stop()
 
     def _close_media(self) -> None:
+        self.transfers.close()
         try:
             self.media.close()
         except OSError as exc:
             LOG.info('MediaCleanup:%s', type(exc).__name__)
 
     async def _disconnect_profile(self) -> None:
+        await self.transfers.stop()
         self._close_media()
         await self._stop_updates()
         self.preview_tokens.clear()
@@ -280,6 +284,7 @@ class Backend:
         self.actions = ConversationActions(self)
         self.features = ClientFeatures(self)
         self.media = MediaPreview(self)
+        self.transfers = MediaTransfers(self)
         previous.close()
 
     def account_list(self, *, include_archived: bool = False) -> dict:
@@ -479,6 +484,13 @@ class Backend:
             raise IPCError('unknown_method', 'This operation is not supported.')
         generation = self.account_generation if expected_generation is None else expected_generation
         try:
+            if method in MediaTransfers.METHODS:
+                if self.transfers.closed:
+                    async with self.lock:
+                        if self.transfers.closed:
+                            await self.transfers.stop()
+                            self.transfers = MediaTransfers(self)
+                return await self.transfers.dispatch(request_id, method, params, generation)
             if method in self.NETWORK:
                 async with self.lock:
                     if generation != self.account_generation:
@@ -705,6 +717,7 @@ class Backend:
         raise IPCError('unknown_method', 'This operation is not supported.')
 
     async def close(self) -> None:
+        await self.transfers.stop()
         self._close_media()
         await self._stop_updates()
         self.preview_tokens.clear()

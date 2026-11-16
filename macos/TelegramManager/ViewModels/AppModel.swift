@@ -139,6 +139,9 @@ enum Screen: String, CaseIterable, Identifiable {
     @Published var busy = false
     @Published var operation = ""
     @Published var progress = ""
+    @Published var mediaTransferFraction: Double?
+    @Published var mediaTransferRequest: String?
+    @Published var mediaTransferPaused = false
     @Published var errorMessage: String?
     @Published var activity: [ActivityEvent] = []
     private var currentActivityID: UUID?
@@ -364,10 +367,18 @@ enum Screen: String, CaseIterable, Identifiable {
             consumeLiveEvent(event)
             return
         }
+        if event["event"].string == "media.expired" {
+            if mediaPreview?.token == data["token"].string { closeMediaPreview() }
+            return
+        }
         if event["event"].string == "progress" {
             let phase = data["phase"].string
             let index = data["index"].int
             let name = safeDisplay(data["group"]["name"].string)
+            if phase == "download", data["total"].doubleValue > 0 {
+                mediaTransferFraction = min(1, max(0, data["index"].doubleValue / data["total"].doubleValue))
+                mediaTransferRequest = event["request_id"].string
+            }
             progress = "\(phase.capitalized) · \(index)\(name.isEmpty ? "" : " · " + name)"
         }
     }
@@ -388,7 +399,7 @@ enum Screen: String, CaseIterable, Identifiable {
     }
     func run(_ title: String, action: @escaping @MainActor () async throws -> Void) async {
         guard !busy else { return }
-        busy = true; operation = title; progress = ""
+        busy = true; operation = title; progress = ""; mediaTransferFraction = nil; mediaTransferRequest = nil; mediaTransferPaused = false
         let event = ActivityEvent(kind: ActivityKind.classify(title), accountID: accountID == 0 ? nil : String(accountID),
                                   profileID: activeProfileID, accountName: accountName.isEmpty ? activeProfile?.title : accountName)
         ActivityHistory.insert(event, into: &activity)
@@ -948,13 +959,29 @@ extension AppModel {
             self.localLabels = result["labels"].array
         } }
     }
+    var downloadFolder: URL {
+        let saved = UserDefaults.standard.string(forKey: "downloadFolder." + activeProfileID)
+        return saved.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+    }
+    func chooseDownloadFolder() {
+        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false; panel.directoryURL = downloadFolder; panel.prompt = "Choose Folder"
+        if panel.runModal() == .OK, let url = panel.url {
+            UserDefaults.standard.set(url.path, forKey: "downloadFolder." + activeProfileID)
+            objectWillChange.send()
+        }
+    }
     func downloadAttachment(_ message: ChatMessage) {
-        guard let chat = selectedChat, connected else { return }
-        let panel = NSSavePanel(); panel.nameFieldStringValue = safeDisplay(message.data["media"]["name"].string).isEmpty ? "Telegram-attachment" : URL(fileURLWithPath: safeDisplay(message.data["media"]["name"].string)).lastPathComponent
-        panel.message = "Save this existing attachment to a new local file. Downloads are limited to 64 MiB."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let chat = selectedChat, let scope = currentUpdateScope, connected, message.data["media"]["can_download"].bool else { return }
+        let panel = NSSavePanel()
+        let folder = downloadFolder
+        panel.directoryURL = folder
+        panel.nameFieldStringValue = MediaFilename.available(MediaFilename.suggested(message.data["media"]["name"].string, mime: message.data["media"]["mime_type"].string), in: folder)
+        panel.message = "Save this existing attachment to a new local file. Downloads are limited to 512 MiB."
+        guard panel.runModal() == .OK, let url = panel.url, scope == currentUpdateScope else { return }
         operationTask = Task { await run("Downloading attachment") {
-            _ = try await self.backend.request("media.download", params: ["destination": .integer(chat.id), "message_id": .integer(message.id), "path": .string(url.path)], timeout: 600)
+            guard scope == self.currentUpdateScope else { throw BackendFailure.disconnected }
+            _ = try await self.backend.request("media.download", params: ["account_id": .integer(scope.accountID), "destination": .integer(chat.id), "message_id": .integer(message.id), "path": .string(url.path)], timeout: 600)
         } }
     }
 }
@@ -1014,8 +1041,22 @@ extension AppModel {
         if fixtureEnvironment["TGM_UI_PROFILE"] == "1" { profileTarget = PeerProfile(data: .object(["id": .integer(202), "name": .string("Example Contact · தமிழ்"), "kind": .string("private"), "username": .string("example_contact"), "about": .string("Synthetic profile fixture.\nසිංහල · தமிழ் · 👩🏽‍💻"), "content_available": .bool(true), "checked_at": .string("2026-10-28T00:00:00+00:00")])) }
         if fixtureEnvironment["TGM_UI_FOLDERS"] == "1" { foldersPresented = true }
         if fixtureEnvironment["TGM_UI_IMAGE"] == "1" {
-            previewImage = NSImage(systemSymbolName: "photo", accessibilityDescription: "Synthetic image viewer fixture")
+            previewImage = NSImage(size: NSSize(width: 640, height: 400), flipped: false) { rect in
+                NSGradient(starting: .systemBlue, ending: .systemTeal)?.draw(in: rect, angle: 30)
+                let label = "Synthetic photo · No Telegram data"
+                label.draw(at: NSPoint(x: 36, y: 180), withAttributes: [.font: NSFont.systemFont(ofSize: 24, weight: .medium), .foregroundColor: NSColor.white])
+                return true
+            }
             mediaPreview = MediaPreviewContext(scope: UpdateScope(profileID: "fixture", accountID: 101, generation: 0), token: "fixture-image", peerID: 202, messageID: 1, bytes: 1024, mimeType: "image/png")
+            if fixtureEnvironment["TGM_UI_TIMED"] == "1" {
+                mediaPreview?.canSave = false
+                mediaPreview?.category = "self_destructing"
+                mediaPreview?.expiresAt = Date().timeIntervalSince1970 + 60
+            }
+            heldMediaPreview = mediaPreview
+        }
+        if let videoPath = fixtureEnvironment["TGM_UI_VIDEO_PATH"] {
+            mediaPreview = MediaPreviewContext(scope: UpdateScope(profileID: "fixture", accountID: 101, generation: 0), token: "fixture-video", peerID: 202, messageID: 1, bytes: 2048, mimeType: "video/mp4", path: videoPath, kind: "video")
             heldMediaPreview = mediaPreview
         }
         if fixtureEnvironment["TGM_UI_INSPECTOR"] == "1" { detail = groups.first; selectedGroup = groups.first?.id }
@@ -1466,30 +1507,36 @@ extension AppModel {
         } }
     }
     func openMediaPreview(_ message: ChatMessage) {
-        guard !busy, !mediaPreviewPreparing, message.contentAvailable, let chat = selectedChat, chat.contentAvailable, let scope = currentUpdateScope else { return }
+        guard !busy, !mediaPreviewPreparing, (message.contentAvailable || message.data["media"]["can_open"].bool), let chat = selectedChat, chat.contentAvailable, let scope = currentUpdateScope else { return }
         closeMediaPreview()
-        let revision = mediaPreviewRevision, requestedAt = Date().timeIntervalSince1970
+        let revision = mediaPreviewRevision
         pendingMediaMessage = (chat.id, message.id)
         mediaPreviewPreparing = true
-        operationTask = Task { await run("Preparing private image preview") {
+        operationTask = Task { await run("Opening attachment") {
             var issued: String?
             defer { if revision == self.mediaPreviewRevision { self.pendingMediaMessage = nil; self.mediaPreviewPreparing = false } }
             do {
-                let result = try await self.backend.request("media.preview.get", params: ["account_id": .integer(scope.accountID), "destination": .integer(chat.id), "message_id": .integer(message.id)], timeout: 180)
+                let result = try await self.backend.request("media.open", params: ["account_id": .integer(scope.accountID), "destination": .integer(chat.id), "message_id": .integer(message.id)], timeout: 180)
                 issued = result["token"].string
                 guard scope == self.currentUpdateScope, result["profile_id"].string == scope.profileID, result["account_generation"].int == scope.generation,
                       result["destination"].int == chat.id, result["message_id"].int == message.id, !result["token"].string.isEmpty, revision == self.mediaPreviewRevision, self.liveProjection?.dirty != true else { throw BackendFailure.disconnected }
                 let path = result["path"].string, bytes = result["bytes"].int, mime = result["mime_type"].string
-                let decoding = Task.detached { try ImagePreviewReader.decode(path: path, expectedBytes: bytes, mimeType: mime) }
-                let decoded = try await withTaskCancellationHandler { try await decoding.value } onCancel: { decoding.cancel() }
+                let expiry = result["expires_at"].doubleValue
+                guard expiry.isFinite, expiry > Date().timeIntervalSince1970, expiry <= Date().timeIntervalSince1970 + 31536000 else { throw BackendFailure.disconnected }
+                let decoding = Task.detached { try ImagePreviewReader.validateMedia(path: path, expectedBytes: bytes, mimeType: mime) }
+                try await withTaskCancellationHandler { try await decoding.value } onCancel: { decoding.cancel() }
+                var decoded: DecodedPreviewImage?
+                if ["image/jpeg", "image/png"].contains(mime) {
+                    decoded = try await Task.detached { try ImagePreviewReader.decode(path: path, expectedBytes: bytes, mimeType: mime) }.value
+                }
                 try Task.checkCancellation()
                 guard scope == self.currentUpdateScope, self.selectedChat?.id == chat.id, revision == self.mediaPreviewRevision,
-                      self.liveProjection?.dirty != true, self.chatMessages.contains(where: { $0.id == message.id && $0.contentAvailable }) else { throw CancellationError() }
-                self.previewImage = NSImage(cgImage: decoded.image, size: NSSize(width: CGFloat(decoded.image.width), height: CGFloat(decoded.image.height)))
-                self.mediaPreview = MediaPreviewContext(scope: scope, token: result["token"].string, peerID: chat.id, messageID: message.id, bytes: bytes, mimeType: mime)
+                      expiry > Date().timeIntervalSince1970, self.liveProjection?.dirty != true, self.chatMessages.contains(where: { $0.id == message.id && ($0.contentAvailable || $0.data["media"]["can_open"].bool) }) else { throw CancellationError() }
+                if let decoded { self.previewImage = NSImage(cgImage: decoded.image, size: NSSize(width: CGFloat(decoded.image.width), height: CGFloat(decoded.image.height))) }
+                self.mediaPreview = MediaPreviewContext(scope: scope, token: result["token"].string, peerID: chat.id, messageID: message.id, bytes: bytes, mimeType: mime, path: path, kind: result["kind"].string, expiresAt: result["expires_at"].doubleValue, canSave: result["can_download"].bool, category: result["category"].string)
                 self.heldMediaPreview = self.mediaPreview
                 self.mediaPreviewExpiryTask = Task {
-                    do { try await Task.sleep(nanoseconds: UInt64(max(0, requestedAt + 900 - Date().timeIntervalSince1970) * 1_000_000_000)) } catch { return }
+                    do { try await Task.sleep(nanoseconds: UInt64(max(0, result["expires_at"].doubleValue - Date().timeIntervalSince1970) * 1_000_000_000)) } catch { return }
                     if self.mediaPreview?.token == result["token"].string { self.closeMediaPreview() }
                 }
             } catch {
@@ -1499,7 +1546,7 @@ extension AppModel {
         } }
     }
     private func releaseMediaToken(_ token: String, account: Int) async {
-        _ = try? await backend.request("media.preview.release", params: ["account_id": .integer(account), "token": .string(token)])
+        _ = try? await backend.request("media.release", params: ["account_id": .integer(account), "token": .string(token)])
     }
     func closeMediaPreview() {
         mediaPreviewRevision += 1; pendingMediaMessage = nil; mediaPreviewPreparing = false
@@ -1507,8 +1554,18 @@ extension AppModel {
         if let preview = mediaPreview ?? heldMediaPreview { Task { await releaseMediaToken(preview.token, account: preview.scope.accountID) } }
         mediaPreview = nil; heldMediaPreview = nil
     }
+    func toggleMediaTransferPause() {
+        guard let request = mediaTransferRequest, let scope = currentUpdateScope else { return }
+        Task {
+            do {
+                let result = try await backend.request(mediaTransferPaused ? "media.resume" : "media.pause", params: ["account_id": .integer(scope.accountID), "request_id": .string(request)])
+                guard currentUpdateScope == scope else { return }
+                mediaTransferPaused = result["paused"].bool
+            } catch { errorMessage = "The transfer has finished or could not be paused." }
+        }
+    }
     func savePreviewAttachment() {
-        guard let preview = mediaPreview, preview.scope == currentUpdateScope,
+        guard let preview = mediaPreview, preview.canSave, preview.scope == currentUpdateScope,
               let message = chatMessages.first(where: { $0.id == preview.messageID }), message.contentAvailable else { return }
         downloadAttachment(message)
     }

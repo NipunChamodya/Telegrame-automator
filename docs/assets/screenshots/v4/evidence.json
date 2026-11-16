@@ -1,0 +1,65 @@
+[
+  {
+    "file": "dark/native-video-player.png",
+    "width": 2520,
+    "height": 1640,
+    "sha256": "6f263c86c21f4fff58271407b2306fc1e5f1274c84959667730e4243083ad8aa",
+    "source": "real XCUITest window capture, synthetic data"
+  },
+  {
+    "file": "dark/timed-photo-viewing-only.png",
+    "width": 2520,
+    "height": 1640,
+    "sha256": "b16e0e4b6e88e453f8ab00ac497a1f83b6610e8c1db2926ab600f209866d66fe",
+    "source": "real XCUITest window capture, synthetic data"
+  },
+  {
+    "file": "light/accounts.png",
+    "width": 2520,
+    "height": 1640,
+    "sha256": "04c7a006b456d2363f4e8f73bbabf71a9f63a2c6a2edb3d738ff3efadda41bd5",
+    "source": "real XCUITest window capture, synthetic data"
+  },
+  {
+    "file": "light/advanced-workspace.png",
+    "width": 2520,
+    "height": 1640,
+    "sha256": "b912b9cd46566c038395c2567292150604b1736f13b007b404ef2742f47db9b7",
+    "source": "real XCUITest window capture, synthetic data"
+  },
+  {
+    "file": "light/chats.png",
+    "width": 2520,
+    "height": 1640,
+    "sha256": "707f7748b51bd45fc9128b231d88584f2c00d87b7aded8d29802b7687b33b46e",
+    "source": "real XCUITest window capture, synthetic data"
+  },
+  {
+    "file": "light/settings.png",
+    "width": 2520,
+    "height": 1640,
+    "sha256": "4bfc6ef8c28658d2414c38c91dafbb3e46257028f141db7eb4f6ed363ddf617a",
+    "source": "real XCUITest window capture, synthetic data"
+  },
+  {
+    "file": "light/synthetic-image-viewer.png",
+    "width": 2520,
+    "height": 1640,
+    "sha256": "49794c91668d0f1fed21e635d8beea3692ed1898711605f76f7635f622e72473",
+    "source": "real XCUITest window capture, synthetic data"
+  },
+  {
+    "file": "light/timed-photo-viewing-only.png",
+    "width": 2520,
+    "height": 1640,
+    "sha256": "cf3226ee9b8e8bb92687e58493c8a76222054d3fa90535739832054dd0535605",
+    "source": "real XCUITest window capture, synthetic data"
+  },
+  {
+    "file": "light/welcome-api-setup.png",
+    "width": 2520,
+    "height": 1640,
+    "sha256": "754ea715ff7fa849e08cd3f6ed1f8855d95f1b970c4858d532d38bc32a5469d2",
+    "source": "real XCUITest window capture, synthetic data"
+  }
+]

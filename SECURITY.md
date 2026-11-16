@@ -1,5 +1,12 @@
 # Security policy and operating model
 
+V4 media security: [implemented boundaries](docs/V4_MEDIA.md) document separate
+ordinary/auto-delete/view-once/self-destruct/secret-chat policies, consumed-media
+markers, private ownership-index recovery, transfer limits and optional bounded
+local voice decoding. Timed exports remain forbidden. Existing credential,
+session, account and message-delivery controls are retained.
+
+
 This application controls a personal Telegram account. The Python service, its SQLite database, macOS Keychain access and native IPC transport are security-sensitive. A native UI does not remove the need for explicit authorization.
 
 The supplied project repository is [NipunChamodya/Telegrame-automator](https://github.com/NipunChamodya/Telegrame-automator). No maintainer email, legal identity, private reporting channel or project license is invented here. If the repository offers GitHub private vulnerability reporting, use that enabled feature. Otherwise request a private reporting channel with a high-level, non-exploitable description; never post secret material publicly.

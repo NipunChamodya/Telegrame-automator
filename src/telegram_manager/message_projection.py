@@ -71,18 +71,19 @@ def normalize_forward(message):
 def normalize_message(message, account: int | None = None, kind: str | None = None) -> dict:
     identity = getattr(message, 'id', None)
     if not message_supported(message):
+        from .media_policy import describe
+        timed = describe(message) if isinstance(getattr(message, 'media', None), (types.MessageMediaPhoto, types.MessageMediaDocument)) and not getattr(message, 'noforwards', False) and not getattr(message, 'restriction_reason', None) else None
         return {'id': identity, 'text': '', 'sender_name': 'Unavailable content',
                 'sender_id': None, 'date': None, 'outgoing': bool(getattr(message, 'out', False)),
-                'media': None, 'content_available': False, 'content_reason': PROTECTED,
+                'media': timed if timed and timed['can_open'] else None, 'content_available': False, 'content_reason': 'Disappearing attachment. Open to view; saving is unavailable.' if timed and timed['can_open'] else PROTECTED,
                 'reactions': [], 'reply_to_id': None, 'entities': [], 'forward': None, 'pinned': False,
                 'can_request_edit': False, 'can_request_delete': False}
     sender = getattr(message, 'sender', None)
     file = getattr(message, 'file', None)
     media = None
     if file is not None:
-        media = {'kind': 'image' if getattr(message, 'photo', None) else 'document',
-                 'name': clean_text(getattr(file, 'name', '') or '')[:256],
-                 'size': getattr(file, 'size', None), 'mime_type': clean_text(getattr(file, 'mime_type', '') or '')[:128] or None}
+        from .media_policy import describe
+        media = describe(message)
     reply = getattr(message, 'reply_to', None)
     reply_peer = getattr(reply, 'reply_to_peer_id', None)
     reactions = []

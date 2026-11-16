@@ -39,3 +39,31 @@ enum ImagePreviewReader {
     }
     private static func invalid() -> BackendFailure { BackendFailure(code: "preview_invalid", message: "This private preview could not be opened safely. Only regular owned JPEG or PNG images up to 8 MiB and 16 megapixels are supported.") }
 }
+
+extension ImagePreviewReader {
+    static func validateMedia(path: String, expectedBytes: Int, mimeType: String) throws {
+        try Task.checkCancellation()
+        guard expectedBytes > 0, expectedBytes <= 512 * 1024 * 1024 else { throw invalid() }
+        let fd = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { throw invalid() }
+        defer { Darwin.close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid(),
+              info.st_nlink == 1, info.st_mode & 0o077 == 0, info.st_size == expectedBytes else { throw invalid() }
+        if mimeType == "image/gif" {
+            guard expectedBytes <= byteLimit, let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+                  CGImageSourceGetType(source) as String? == "com.compuserve.gif", CGImageSourceGetCount(source) <= 200 else { throw invalid() }
+            var pixels = 0
+            for index in 0..<CGImageSourceGetCount(source) {
+                try Task.checkCancellation()
+                guard let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
+                      let width = props[kCGImagePropertyPixelWidth] as? NSNumber,
+                      let height = props[kCGImagePropertyPixelHeight] as? NSNumber else { throw invalid() }
+                let w = width.intValue, h = height.intValue
+                guard w > 0, h > 0, w <= 16_000_000 / h else { throw invalid() }
+                pixels += w * h
+                guard pixels <= 32_000_000 else { throw invalid() }
+            }
+        }
+    }
+}

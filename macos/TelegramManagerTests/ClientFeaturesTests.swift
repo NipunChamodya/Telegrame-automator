@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 import CoreGraphics
 import ImageIO
 import Darwin
@@ -50,5 +51,59 @@ final class ClientFeaturesTests: XCTestCase {
         let contact = TelegramContact(data: .object(["id": .integer(202), "name": .string("தமிழ் 👩🏽‍💻"), "username": .string("example")]))
         XCTAssertEqual(contact.name, "தமிழ் 👩🏽‍💻"); XCTAssertEqual(contact.id, 202); XCTAssertFalse(contact.available)
         XCTAssertEqual(PeerProfile(data: .object(["id": .integer(203), "name": .string("ශ්‍රී ලංකා")])).name, "ශ්‍රී ලංකා")
+    }
+}
+
+final class MediaV4NativeTests: XCTestCase {
+    func testSafeSuggestedNamesDoNotPreserveExecutableExtensionsOrPaths() {
+        XCTAssertEqual(MediaFilename.suggested("../../photo.app", mime: "image/png"), "photo.png")
+        XCTAssertEqual(MediaFilename.suggested("C:\\private\\run.sh", mime: "application/octet-stream"), "run.bin")
+        XCTAssertEqual(MediaFilename.suggested(".hidden", mime: "application/pdf"), "Attachment.pdf")
+    }
+    func testDuplicateNamesChooseAnAvailableAlternative() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data().write(to: folder.appendingPathComponent("photo.png"))
+        XCTAssertEqual(MediaFilename.available("photo.png", in: folder), "photo (1).png")
+    }
+    func testTimedContextNeverInventsExportCapability() {
+        let scope = UpdateScope(profileID: "fixture", accountID: 1, generation: 0)
+        let context = MediaPreviewContext(scope: scope, token: "once", peerID: 2, messageID: 3, bytes: 100, mimeType: "video/mp4", canSave: false, category: "view_once")
+        XCTAssertFalse(context.canSave)
+        XCTAssertTrue(context.playbackSupported)
+        XCTAssertFalse(context.documentSupported)
+    }
+    func testBoundedAnimatedGIFValidation() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".gif")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let bitmap = try XCTUnwrap(CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8, bytesPerRow: 32, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let image = try XCTUnwrap(bitmap.makeImage())
+        let writer = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, "com.compuserve.gif" as CFString, 2, nil))
+        for _ in 0..<2 { CGImageDestinationAddImage(writer, image, nil) }
+        XCTAssertTrue(CGImageDestinationFinalize(writer)); XCTAssertEqual(chmod(url.path, 0o600), 0)
+        let size = try Data(contentsOf: url).count
+        XCTAssertNoThrow(try ImagePreviewReader.validateMedia(path: url.path, expectedBytes: size, mimeType: "image/gif"))
+        XCTAssertThrowsError(try ImagePreviewReader.validateMedia(path: url.path, expectedBytes: size + 1, mimeType: "image/gif"))
+        XCTAssertEqual(chmod(url.path, 0o644), 0)
+        XCTAssertThrowsError(try ImagePreviewReader.validateMedia(path: url.path, expectedBytes: size, mimeType: "image/gif"))
+    }
+}
+
+extension MediaV4NativeTests {
+    func testSyntheticVideoIsValidatedAndPlayableWithNativePlayer() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = root.appendingPathComponent("tests/fixtures/media/synthetic-video.mp4")
+        let target = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
+        try FileManager.default.copyItem(at: source, to: target)
+        defer { try? FileManager.default.removeItem(at: target) }
+        XCTAssertEqual(chmod(target.path, 0o600), 0)
+        let size = try Data(contentsOf: target).count
+        try ImagePreviewReader.validateMedia(path: target.path, expectedBytes: size, mimeType: "video/mp4")
+        let asset = AVURLAsset(url: target)
+        let playable = try await asset.load(.isPlayable)
+        XCTAssertTrue(playable)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        XCTAssertEqual(tracks.count, 1)
     }
 }

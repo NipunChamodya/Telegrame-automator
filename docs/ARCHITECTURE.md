@@ -1,5 +1,10 @@
 # Architecture
 
+V4 update: [native media contract](V4_MEDIA.md) supersedes the V3 media limits,
+viewer exclusions and blanket TTL refusal below for the dedicated V4 routes.
+Existing text/action restrictions and legacy preview contracts remain unchanged.
+
+
 ## Boundaries
 
 ```text

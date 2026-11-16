@@ -91,9 +91,13 @@ struct RootView: View {
         VStack(spacing: 0) {
                 if model.busy {
                     HStack(spacing: 12) {
-                        ProgressView().controlSize(.small)
+                        if let fraction = model.mediaTransferFraction {
+                            ProgressView(value: fraction).frame(width: 90).accessibilityLabel("Download progress")
+                        } else { ProgressView().controlSize(.small) }
                         VStack(alignment: .leading, spacing: 2) { Text(model.operation).font(.callout.weight(.medium)); if !model.progress.isEmpty { Text(model.progress).font(.caption).foregroundStyle(.secondary).lineLimit(1) } }
-                        Spacer(); Button("Cancel", role: .cancel) { model.cancelOperation() }
+                        Spacer()
+                        if model.mediaTransferRequest != nil { Button(model.mediaTransferPaused ? "Resume" : "Pause") { model.toggleMediaTransferPause() } }
+                        Button("Cancel", role: .cancel) { model.cancelOperation() }
                     }.padding(12).background(.blue.opacity(0.06))
                     Divider()
                 }
@@ -150,7 +154,13 @@ struct RootView: View {
     @ViewBuilder private func sidebarSection(_ title: String, screens: [Screen]) -> some View {
         Section(title) {
             ForEach(screens) { screen in
-                Label(screen.rawValue, systemImage: screen.symbol).tag(screen).padding(.vertical, 4)
+                if screen == .advancedWorkspace {
+                    Button { model.navigate(to: .advancedWorkspace) } label: {
+                        Label(screen.rawValue, systemImage: screen.symbol).frame(maxWidth: .infinity, alignment: .leading)
+                    }.buttonStyle(.plain).tag(screen).padding(.vertical, 4)
+                } else {
+                    Label(screen.rawValue, systemImage: screen.symbol).tag(screen).padding(.vertical, 4)
+                }
             }
         }
     }

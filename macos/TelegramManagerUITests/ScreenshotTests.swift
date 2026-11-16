@@ -6,10 +6,14 @@ final class ScreenshotTests: XCTestCase {
         app.launchEnvironment = ["TGM_TEST_MODE": "1", "TGM_UI_FIXTURE": "1", "TGM_NO_AUTO_CONNECT": "1", "TGM_DATA_DIR": NSTemporaryDirectory() + "tgm-ui-fixture-" + UUID().uuidString, "TGM_UI_SIZE": ProcessInfo.processInfo.environment["TGM_SCREENSHOT_SIZE"] ?? "standard"]
         app.launchEnvironment.merge(extra) { _, new in new }
         let style = ProcessInfo.processInfo.environment["TGM_SCREENSHOT_APPEARANCE"] ?? "light"
+        app.launchEnvironment["TGM_UI_APPEARANCE"] = extra["TGM_UI_APPEARANCE"] ?? style
         app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-appearance", style == "dark" ? "dark" : "light"]
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
         return app
+    }
+    private func sidebarItem(_ title: String, app: XCUIApplication) -> XCUIElement {
+        title == "Advanced Workspace" ? app.buttons[title].firstMatch : app.outlines.staticTexts[title].firstMatch
     }
     private func capture(_ name: String, app: XCUIApplication) {
         let attachment = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
@@ -21,12 +25,12 @@ final class ScreenshotTests: XCTestCase {
         continueAfterFailure = false
         let app = launch()
         for screen in ["Chats", "Contacts", "Groups", "Channels", "Saved Messages", "Advanced Workspace", "Accounts", "Settings"] {
-            let item = app.outlines.staticTexts[screen].firstMatch
+            let item = sidebarItem(screen, app: app)
             XCTAssertTrue(item.waitForExistence(timeout: 5), "Sidebar item: \(screen)")
             item.click(); capture(screen.lowercased(), app: app)
         }
         for tool in ["Dashboard", "Group Management", "Permissions", "Composer", "Drafts", "Destinations", "History", "Activity", "Message Actions"] {
-            app.outlines.staticTexts["Advanced Workspace"].firstMatch.click()
+            sidebarItem("Advanced Workspace", app: app).click()
             let item = app.descendants(matching: .any)["advanced_" + tool].firstMatch
             XCTAssertTrue(item.waitForExistence(timeout: 5)); item.click()
             capture(tool.lowercased(), app: app)
@@ -208,11 +212,11 @@ extension ScreenshotTests {
         let app = launch()
         for _ in 0..<2 {
             for page in ["Chats", "Contacts", "Groups", "Channels", "Saved Messages", "Accounts", "Settings", "Advanced Workspace"] {
-                app.outlines.staticTexts[page].firstMatch.click()
+                sidebarItem(page, app: app).click()
                 assertShell(app)
             }
             for tool in ["Dashboard", "Group Management", "Permissions", "Composer", "Drafts", "Destinations", "History", "Activity", "Message Actions"] {
-                app.outlines.staticTexts["Advanced Workspace"].firstMatch.click()
+                sidebarItem("Advanced Workspace", app: app).click()
                 app.descendants(matching: .any)["advanced_" + tool].firstMatch.click()
                 assertShell(app)
                 capture("shell-" + tool, app: app)
@@ -272,5 +276,27 @@ extension ScreenshotTests {
             XCTAssertTrue(app.descendants(matching: .any)[state == "TGM_UI_MESSAGES_ERROR" ? "messagesError" : "messagesLoading"].firstMatch.waitForExistence(timeout: 5))
             assertShell(app); capture(state.lowercased(), app: app); app.terminate()
         }
+    }
+
+    func testV4TimedAndVideoMediaScreenshots() throws {
+        continueAfterFailure = false
+        var app = launch(["TGM_UI_IMAGE": "1", "TGM_UI_TIMED": "1", "TGM_UI_CONNECTED": "1", "TGM_UI_APPEARANCE": "dark"])
+        XCTAssertTrue(app.descendants(matching: .any)["imagePreviewSheet"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Save As…"].exists)
+        capture("timed-photo-viewing-only", app: app)
+        app.buttons["Zoom In"].click()
+        app.buttons["Actual Size"].click()
+        app.buttons["Close"].firstMatch.click()
+        XCTAssertFalse(app.descendants(matching: .any)["imagePreviewSheet"].exists)
+        app.terminate()
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let movie = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tgm-video-" + UUID().uuidString + ".mp4")
+        try FileManager.default.copyItem(at: root.appendingPathComponent("tests/fixtures/media/synthetic-video.mp4"), to: movie)
+        defer { try? FileManager.default.removeItem(at: movie) }
+        app = launch(["TGM_UI_VIDEO_PATH": movie.path, "TGM_UI_CONNECTED": "1", "TGM_UI_APPEARANCE": "dark"])
+        XCTAssertTrue(app.descendants(matching: .any)["imagePreviewSheet"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.checkBoxes["play/pause"].firstMatch.waitForExistence(timeout: 10))
+        capture("native-video-player", app: app)
+        app.terminate()
     }
 }

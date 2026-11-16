@@ -32,6 +32,11 @@ struct SettingsView: View {
                 LabeledContent("Session file", value: model.status["session_present"].bool ? "Present in private storage" : "Not present")
                 Button("Restore Existing Session") { model.reconnect() }.disabled(model.busy)
             }
+            Section("Media") {
+                LabeledContent("Download folder", value: model.downloadFolder.lastPathComponent)
+                Button("Choose Download Folder…") { model.chooseDownloadFolder() }
+                Text("Applies to this account. Save As lets you choose a different location each time. Disappearing media cannot be saved.").font(.caption).foregroundStyle(.secondary)
+            }
             Section("Discovery") {
                 TextField("Basic metadata lifetime (seconds)", value: $basicTTL, format: .number)
                 TextField("Permission lifetime (seconds)", value: $permissionTTL, format: .number)

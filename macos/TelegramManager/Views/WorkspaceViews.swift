@@ -310,7 +310,10 @@ struct ChatsView: View {
                         if message.outgoing, let frontier = model.liveProjection?.readOutboxMaxID, message.id <= frontier { Label("Read", systemImage: "checkmark.circle").font(.caption2).foregroundStyle(.secondary) }
                     }
                 } else { Text("Content unavailable").foregroundStyle(.secondary) }
-                if message.hasAttachment && message.contentAvailable { HStack { Label(message.data["media"]["kind"].string, systemImage: "paperclip"); if message.data["media"]["kind"].string == "image" || ["image/jpeg", "image/png"].contains(message.data["media"]["mime_type"].string) { Button("Preview Image") { model.openMediaPreview(message) }.disabled(model.busy) }; Button("Save Attachment…") { model.downloadAttachment(message) }.disabled(model.busy) }.font(.caption) }
+                if message.hasAttachment && (message.contentAvailable || message.data["media"]["can_open"].bool) {
+                    MediaAttachmentRow(message: message, busy: model.busy,
+                        open: { model.openMediaPreview(message) }, save: { model.downloadAttachment(message) })
+                }
             }.padding(12).background(message.outgoing ? Color.blue.opacity(0.09) : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
             if !message.outgoing { Spacer(minLength: 30) }
         }

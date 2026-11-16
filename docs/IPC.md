@@ -1,5 +1,10 @@
 # Native application IPC, protocol version 1
 
+V4 update: [native media contract](V4_MEDIA.md) supersedes the V3 media limits,
+viewer exclusions and blanket TTL refusal below for the dedicated V4 routes.
+Existing text/action restrictions and legacy preview contracts remain unchanged.
+
+
 Launch `python -u -m telegram_manager.ipc` with `PYTHONPATH` pointing to the checkout's `src`. The Swift process owns stdin/stdout pipes, with no listener or HTTP service. The Python process holds the same private-directory application lock as the CLI and opens the existing `manager.sqlite3` and `account.session` paths. Cached reads work immediately using the bound account ID; connecting restores authorization and never automatically discovers, inspects or sends.
 
 Each UTF-8 newline-delimited request must have exactly:

@@ -1,3 +1,13 @@
+# V4 update — 2026-11-16
+
+See [V4 implementation and screen-by-screen UX audit](V4_REPORT.md) and
+[media contract](V4_MEDIA.md). V4 executed real synthetic-data UI tests and
+retains inspected light/dark screenshots; the V3 blocked-graphics reports below
+are historical. Live Telegram and full manual accessibility acceptance remain
+unverified. Final V4 test/build results are recorded in the V4 report.
+
+---
+
 # V3 implementation and validation — 0.4.0
 
 Validated 2026-10-28 on macOS 26.6.2 arm64, Python 3.13.4, Telethon 1.45.0 (layer 229), Xcode 27.1 / Swift 6.4. The following current results supersede the clearly historical V2 sections below.

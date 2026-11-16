@@ -151,3 +151,28 @@ struct CachedReadStatus: View {
         }.fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("cachedStatus_" + screen.rawValue)
     }
 }
+
+
+struct MediaAttachmentRow: View {
+    let message: ChatMessage
+    let busy: Bool
+    let open: () -> Void
+    let save: () -> Void
+    private var media: JSONValue { message.data["media"] }
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol).font(.title2).foregroundStyle(.secondary).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(media["name"].string.isEmpty ? media["kind"].string.capitalized : safeDisplay(media["name"].string)).font(.callout.weight(.medium)).lineLimit(2)
+                Text(ByteCountFormatter.string(fromByteCount: Int64(media["size"].int), countStyle: .file)).font(.caption).foregroundStyle(.secondary)
+                if media["category"].string != "ordinary" { Label("Disappearing media · viewing only", systemImage: "timer").font(.caption).foregroundStyle(.secondary) }
+            }
+            Spacer(minLength: 8)
+            if media["can_open"].bool { Button("Open", action: open).disabled(busy).accessibilityLabel("Open attachment") }
+            if media["can_download"].bool { Button("Save As…", action: save).disabled(busy).accessibilityLabel("Save attachment as") }
+        }.padding(12).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
+    }
+    private var symbol: String {
+        switch media["kind"].string { case "photo": "photo"; case "video", "animation": "play.rectangle"; case "voice": "waveform"; case "audio": "music.note"; default: "doc" }
+    }
+}

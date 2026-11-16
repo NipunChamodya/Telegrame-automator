@@ -1,3 +1,13 @@
+# V4 update — 2026-11-16
+
+See [V4 implementation and screen-by-screen UX audit](V4_REPORT.md) and
+[media contract](V4_MEDIA.md). V4 executed real synthetic-data UI tests and
+retains inspected light/dark screenshots; the V3 blocked-graphics reports below
+are historical. Live Telegram and full manual accessibility acceptance remain
+unverified. Final V4 test/build results are recorded in the V4 report.
+
+---
+
 # V3 graphical validation status — 2026-10-28
 
 **BLOCKED, not visually verified.** The current arm64 Debug/Release applications build and pass strict signature checks. The V3 screenshot run (`./macos/screenshots.sh light standard`) compiled its tests but failed to establish runner communication: `com.apple.testmanagerd.control` lookup **159 — Sandbox restriction**. Exit 133; no UI assertion or screenshot capture is counted as passed. An isolated fixture direct launch exited -6; `open -n` returned -10827. The executable exists, is executable and has the correct bundle binding. Earlier independent minimal-app registration reproduction remains relevant; no signing/lock deletion workaround was applied.

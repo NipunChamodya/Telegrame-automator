@@ -5,6 +5,15 @@ import AppKit
     @NSApplicationDelegateAdaptor(ApplicationDelegate.self) var delegate
     @StateObject private var model = AppModel()
     @AppStorage("appearance") private var appearance = "system"
+    private var selectedColorScheme: ColorScheme? {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["TGM_UI_FIXTURE"] == "1",
+           let value = ProcessInfo.processInfo.environment["TGM_UI_APPEARANCE"] {
+            return value == "dark" ? .dark : .light
+        }
+        #endif
+        return appearance == "light" ? .light : appearance == "dark" ? .dark : nil
+    }
     private var fixtureWindowSize: CGSize {
         #if DEBUG
         if ProcessInfo.processInfo.environment["TGM_UI_FIXTURE"] == "1" {
@@ -19,7 +28,7 @@ import AppKit
         Window("Unofficial Telegram Manager", id: "workspace") {
             RootView(model: model)
                 .frame(minWidth: 980, minHeight: 640)
-                .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
+                .preferredColorScheme(selectedColorScheme)
                 .onAppear { delegate.model = model; model.start() }
         }
         .windowStyle(.titleBar)
@@ -34,7 +43,7 @@ import AppKit
         }
         Settings {
             SettingsView(model: model).frame(width: 650, height: 600)
-                .preferredColorScheme(appearance == "light" ? .light : appearance == "dark" ? .dark : nil)
+                .preferredColorScheme(selectedColorScheme)
         }
     }
 }

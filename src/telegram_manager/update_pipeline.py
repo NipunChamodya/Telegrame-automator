@@ -202,6 +202,7 @@ class UpdatePipeline:
                 return
             if kind == 'edit':
                 try:
+                    self.backend.transfers.invalidate(peer, [identity])
                     self.backend.media.invalidate(peer, [identity])
                 except OSError:
                     self.mark_dirty('gap')
@@ -224,6 +225,7 @@ class UpdatePipeline:
                 self.publish('message.changed', payload)
         elif kind == 'delete':
             try:
+                self.backend.transfers.invalidate(peer, payload['message_ids'])
                 self.backend.media.invalidate(peer, payload['message_ids'])
             except OSError:
                 self.mark_dirty('gap')

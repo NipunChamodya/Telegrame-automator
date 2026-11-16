@@ -1,5 +1,10 @@
 # V3 conversations and client feature API
 
+V4 update: [native media contract](V4_MEDIA.md) supersedes the V3 media limits,
+viewer exclusions and blanket TTL refusal below for the dedicated V4 routes.
+Existing text/action restrictions and legacy preview contracts remain unchanged.
+
+
 All methods use the [strict JSON-line IPC envelope](IPC.md). Results add active `profile_id` and `account_generation`; live-update and selected feature results also carry the fields listed below. Explicit account IDs must match the bound, authorized account. Network/mutation routes serialize with account switching and managed sending. Cached reads do not connect to Telegram.
 
 ## Supported content boundary

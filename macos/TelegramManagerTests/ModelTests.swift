@@ -145,10 +145,10 @@ for line in sys.stdin:
     if method=='contacts.open': result={'chat':{'id':params['user_id'],'name':'தமிழ் Contact','kind':'private','content_available':True}}
     if method=='profile.get': result={'profile':{'id':params['peer_id'],'name':'தமிழ் Contact','kind':'private','username':'tamil_contact','about':'A real-shape synthetic profile','verified':False,'has_photo':True,'checked_at':'2026-10-28T00:00:00+00:00','content_available':True}}
     if method in ('folders.list','folders.refresh'): result={'folders':[{'id':2,'title':'Work','contacts':True,'include_peer_ids':[202],'exclude_peer_ids':[],'pinned_peer_ids':[]}],'source':'telegram_read_only','membership_supported':False}
-    if method=='media.preview.get':
+    if method=='media.open':
         path=pathlib.Path(__file__).with_name('preview.png')
-        result={'token':'image-fixture','path':str(path),'bytes':path.stat().st_size,'mime_type':'image/png','profile_id':profile,'account_generation':0,'destination':params['destination'],'message_id':params['message_id']}
-    if method=='media.preview.release': result={'released':True}
+        result={'expires_at':__import__('time').time()+900,'category':'ordinary','can_download':True,'kind':'photo','token':'image-fixture','path':str(path),'bytes':path.stat().st_size,'mime_type':'image/png','profile_id':profile,'account_generation':0,'destination':params['destination'],'message_id':params['message_id']}
+    if method=='media.release': result={'released':True}
     if method=='groups':
         rows=[r for r in records if params.get('query','').casefold() in r['name'].casefold() and params.get('permission','all') in ('all',r['permission']) and params.get('kind','all') in ('all',r['kind'])]
         result={'groups':rows,'total':len(rows)}
@@ -377,8 +377,8 @@ for line in sys.stdin:
         model.closeMediaPreview(); try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertNil(model.previewImage)
         let trace = try String(contentsOf: directory.appendingPathComponent("src/telegram_manager/requests"), encoding: .utf8)
-        XCTAssertEqual(trace.components(separatedBy: "media.preview.get").count - 1, 1)
-        XCTAssertEqual(trace.components(separatedBy: "media.preview.release").count - 1, 1)
+        XCTAssertEqual(trace.components(separatedBy: "media.open").count - 1, 1)
+        XCTAssertEqual(trace.components(separatedBy: "media.release").count - 1, 1)
         await model.shutdown()
     }
     @MainActor func testMessageActionRequiresExactConfirmationAndCommitsOnceToSeparateLedger() async throws {
@@ -391,7 +391,10 @@ for line in sys.stdin:
         model.beginMessageAction("edit", message: message)
         model.messageActionDraft = "revised தமிழ் 👩‍💻"
         model.previewMessageAction()
-        try await Task.sleep(nanoseconds: 100_000_000)
+        for _ in 0..<100 {
+            if model.messageActionPreview != nil { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
         XCTAssertNotNil(model.messageActionPreview)
         model.messageActionConfirmation = "yes"
         XCTAssertFalse(model.canCommitMessageAction)
@@ -399,7 +402,10 @@ for line in sys.stdin:
         model.messageActionConfirmation = "EDIT 1 IN 91"
         XCTAssertTrue(model.canCommitMessageAction)
         model.commitMessageAction(); model.commitMessageAction()
-        try await Task.sleep(nanoseconds: 100_000_000)
+        for _ in 0..<100 {
+            if model.messageActionResult != nil { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
         XCTAssertEqual(model.messageActionResult?["status"].string, "acknowledged")
         XCTAssertTrue(model.messageActionSubmitted); XCTAssertFalse(model.canCommitMessageAction)
         XCTAssertEqual(model.messageOperations.count, 1); XCTAssertTrue(model.deliveries.isEmpty)
