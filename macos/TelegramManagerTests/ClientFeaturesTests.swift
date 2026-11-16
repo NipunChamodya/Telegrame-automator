@@ -107,3 +107,42 @@ extension MediaV4NativeTests {
         XCTAssertEqual(tracks.count, 1)
     }
 }
+
+
+final class SmartArchiveTests: XCTestCase {
+    func testCustomDateIncludesFinalDayAcrossDaylightSaving() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let date = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 3, day: 8)))
+        var draft = ArchiveDraft(); draft.range = "custom"; draft.start = date; draft.end = date
+        let range = draft.bounds(now: date, calendar: calendar)
+        XCTAssertEqual(range.1 - range.0, 23 * 3600)
+    }
+    func testArchiveRequiresMediaFolderAndValidDates() {
+        var draft = ArchiveDraft()
+        XCTAssertFalse(draft.valid)
+        draft.folder = FileManager.default.temporaryDirectory
+        XCTAssertTrue(draft.valid)
+        draft.types = []; XCTAssertFalse(draft.valid)
+        draft.types = ["photo"]; draft.range = "custom"; draft.start = Date().addingTimeInterval(86400 * 2); draft.end = Date()
+        XCTAssertFalse(draft.valid)
+    }
+    func testEveryArchiveStateHasSimpleLanguage() {
+        let expected = ["finding": "Finding media", "saving": "Saving", "paused": "Paused", "waiting": "Waiting for Telegram", "attention": "Needs attention", "finished": "Finished", "cancelled": "Cancelled"]
+        for (state, title) in expected {
+            let job = ArchiveJob(data: .object(["id": .string("fixture"), "state": .string(state)]))
+            XCTAssertEqual(job.status, title)
+        }
+    }
+    func testArchiveTargetRetainsConversationAndAccountIdentity() {
+        let scope = UpdateScope(profileID: "one", accountID: 11, generation: 3)
+        let chat = ChatSummary(data: .object(["id": .integer(22), "kind": .string("private"), "name": .string("Family")]))
+        let target = ArchiveTarget(scope: scope, chat: chat)
+        XCTAssertEqual(target.scope, scope); XCTAssertEqual(target.chat.id, 22)
+        XCTAssertNotEqual(target.id, ArchiveTarget(scope: UpdateScope(profileID: "two", accountID: 12, generation: 4), chat: chat).id)
+    }
+    func testChannelAccessRequiresExplicitSponsoredCapability() {
+        XCTAssertFalse(ChatSummary(data: .object(["kind": .string("channel"), "content_available": .bool(true)])).contentAvailable)
+        XCTAssertTrue(ChatSummary(data: .object(["kind": .string("channel"), "content_available": .bool(true), "sponsored_ready": .bool(true)])).contentAvailable)
+    }
+}

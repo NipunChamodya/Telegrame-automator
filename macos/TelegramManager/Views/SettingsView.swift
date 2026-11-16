@@ -28,8 +28,8 @@ struct SettingsView: View {
             }
             Section("Telegram") {
                 LabeledContent("Connection", value: model.connected ? "Connected" : "Disconnected")
-                LabeledContent("Account binding", value: model.accountID == 0 ? "Not bound" : String(model.accountID))
-                LabeledContent("Session file", value: model.status["session_present"].bool ? "Present in private storage" : "Not present")
+                LabeledContent("Account", value: model.activeProfile?.title ?? "Not connected")
+                Text("Account details are stored privately on this Mac.").font(.caption).foregroundStyle(.secondary)
                 Button("Restore Existing Session") { model.reconnect() }.disabled(model.busy)
             }
             Section("Media") {

@@ -1,5 +1,11 @@
 # V4 update — 2026-11-16
 
+V4.1 update: [Smart Media Archive](V4_1_SMART_ARCHIVE.md) and
+[UX audit/validation](V4_1_UX_AUDIT.md) define persistent archive jobs and the
+conditional sponsored-message channel gate. Older blanket channel/media limits
+below remain historical except where the current contracts retain them.
+
+
 See [V4 implementation and screen-by-screen UX audit](V4_REPORT.md) and
 [media contract](V4_MEDIA.md). V4 executed real synthetic-data UI tests and
 retains inspected light/dark screenshots; the V3 blocked-graphics reports below

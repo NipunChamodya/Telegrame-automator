@@ -87,9 +87,14 @@ class ChatFeatures:
             kind = string(p, 'kind', default='all', maximum=16)
             if kind not in {'all','private','saved','groups','group','supergroup','channel'}:
                 raise IPCError('invalid_params', 'Choose a supported chat type.')
-            return self.store().page(b.account(), string(p,'query',default='',maximum=256), kind,
+            result = self.store().page(b.account(), string(p,'query',default='',maximum=256), kind,
                                      integer(p,'page',default=0,minimum=0,maximum=100000),
                                      integer(p,'size',default=50,minimum=1,maximum=100), sort=sort)
+            from .sponsored import granted
+            for row in result['chats']:
+                if row['kind'] == 'channel' and not granted(b.client, row['id']):
+                    row.update(content_available=False, sponsored_ready=False)
+            return result
         if method == 'chats.refresh':
             fields(p, {'limit', 'after'})
             limit = integer(p,'limit',default=100,minimum=1,maximum=100)
@@ -119,6 +124,9 @@ class ChatFeatures:
                         'last_date':timestamp(getattr(msg,'date',None)),
                         'archived':getattr(dialog,'archived',None), 'pinned':bool(getattr(dialog,'pinned',False)), 'cached_at':time.time(),
                         **classify_entity(entity, account)}
+                from .sponsored import granted
+                if kind == 'channel' and granted(b.client, data['id']) and not any(getattr(entity, key, False) for key in ('restricted','restriction_reason','noforwards','left','kicked','deactivated')):
+                    data.update(content_available=True,content_reason=None,sponsored_ready=True)
                 if not data['content_available'] or not message_supported(msg):
                     data['last_message'] = ''
                 self.store().save(account,data)

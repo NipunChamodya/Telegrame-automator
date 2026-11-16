@@ -55,8 +55,11 @@ class TemporaryBackendTests(unittest.IsolatedAsyncioTestCase):
         self.session.write_bytes(b'opaque synthetic session fixture')
 
     async def asyncTearDown(self):
+        active_store = self.backend.store
         await self.backend.close()
-        self.store.close()
+        active_store.close()
+        if active_store is not self.store:
+            self.store.close()
         self.temp.cleanup()
 
 

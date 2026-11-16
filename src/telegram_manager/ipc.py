@@ -33,6 +33,8 @@ from .chat_features import ChatFeatures
 from .client_features import ClientFeatures
 from .media_preview import MediaPreview
 from .media_transfers import MediaTransfers
+from .archive_jobs import ArchiveJobs
+from .sponsored import SponsoredMessages
 from .conversation_actions import ConversationActions
 from .update_pipeline import UpdatePipeline
 from . import __version__
@@ -129,7 +131,7 @@ class Backend:
                'draft.save', 'approval.set', 'storage.backup', 'diagnostics.export', 'settings.update',
                'accounts.add', 'accounts.switch', 'accounts.disconnect', 'accounts.logout',
                'accounts.remove', 'accounts.archive', 'accounts.restore'} | ChatFeatures.NETWORK | UpdatePipeline.NETWORK | ConversationActions.NETWORK | ClientFeatures.NETWORK | MediaPreview.NETWORK
-    METHODS = NETWORK | MediaTransfers.METHODS | {'health', 'status', 'settings', 'groups', 'detail', 'draft.get',
+    METHODS = NETWORK | SponsoredMessages.METHODS | ArchiveJobs.METHODS | MediaTransfers.METHODS | {'health', 'status', 'settings', 'groups', 'detail', 'draft.get',
                          'approvals', 'history', 'cancel', 'shutdown', 'accounts.list'} | ChatFeatures.METHODS | UpdatePipeline.METHODS | ConversationActions.METHODS | ClientFeatures.METHODS | MediaPreview.METHODS
     ALIASES = {'groups.list': 'groups', 'groups.get': 'detail', 'destinations.list': 'approvals'}
 
@@ -172,6 +174,8 @@ class Backend:
         self.features = ClientFeatures(self)
         self.media = MediaPreview(self)
         self.transfers = MediaTransfers(self)
+        self.archives = ArchiveJobs(self)
+        self.sponsored = SponsoredMessages(self)
 
     @staticmethod
     def _validate_preferences(p: dict) -> None:
@@ -225,6 +229,10 @@ class Backend:
             LOG.info('MediaCleanup:%s', type(exc).__name__)
 
     async def _disconnect_profile(self) -> None:
+        self.sponsored = SponsoredMessages(self)
+        if self.client is not None:
+            self.client._tgm_sponsored_grants = {}
+        await self.archives.stop()
         await self.transfers.stop()
         self._close_media()
         await self._stop_updates()
@@ -285,6 +293,8 @@ class Backend:
         self.features = ClientFeatures(self)
         self.media = MediaPreview(self)
         self.transfers = MediaTransfers(self)
+        self.archives = ArchiveJobs(self)
+        self.sponsored = SponsoredMessages(self)
         previous.close()
 
     def account_list(self, *, include_archived: bool = False) -> dict:
@@ -484,6 +494,13 @@ class Backend:
             raise IPCError('unknown_method', 'This operation is not supported.')
         generation = self.account_generation if expected_generation is None else expected_generation
         try:
+            if method in SponsoredMessages.METHODS:
+                async with self.lock:
+                    if generation != self.account_generation:
+                        raise IPCError('account_changed', 'The selected account changed.')
+                    return await self.sponsored.dispatch(method, params, generation)
+            if method in ArchiveJobs.METHODS:
+                return await self.archives.dispatch(method, params, generation)
             if method in MediaTransfers.METHODS:
                 if self.transfers.closed:
                     async with self.lock:
@@ -717,6 +734,7 @@ class Backend:
         raise IPCError('unknown_method', 'This operation is not supported.')
 
     async def close(self) -> None:
+        await self.archives.stop()
         await self.transfers.stop()
         self._close_media()
         await self._stop_updates()

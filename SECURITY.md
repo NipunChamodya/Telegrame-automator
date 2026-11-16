@@ -1,5 +1,12 @@
 # Security policy and operating model
 
+V4.1 adds ordinary-media archive ledgers, owned partial-file recovery and
+non-overwriting publication through retained directory handles. Account/profile
+checks and existing timed/protected restrictions remain. Unsupported sponsored
+responses do not unlock channel content. Private archive ledgers contain paths and
+filenames; protect their backups. See [the implemented contract](docs/V4_1_SMART_ARCHIVE.md).
+
+
 V4 media security: [implemented boundaries](docs/V4_MEDIA.md) document separate
 ordinary/auto-delete/view-once/self-destruct/secret-chat policies, consumed-media
 markers, private ownership-index recovery, transfer limits and optional bounded

@@ -32,7 +32,7 @@ def classify_entity(entity, account: int) -> dict:
 def project_dialog(row: dict) -> dict:
     result = dict(row)
     available = (row.get('content_known') is True and row.get('content_available') is True
-                 and row.get('kind') in {'private', 'saved', 'group', 'supergroup'}
+                 and (row.get('kind') in {'private', 'saved', 'group', 'supergroup'} or row.get('kind') == 'channel' and row.get('sponsored_ready') is True)
                  and not row.get('is_bot'))
     result['content_available'] = available
     if not available:
@@ -48,7 +48,13 @@ async def require_content_peer(client, account: int, destination: int):
     if utils.get_peer_id(entity) != destination:
         raise IPCError('destination_unavailable', 'The resolved conversation does not match the selection.')
     policy = classify_entity(entity, account)
+    from .sponsored import granted
+    if (policy['kind'] == 'channel' and granted(client, destination)
+            and not any(getattr(entity, key, False) for key in ('restricted', 'restriction_reason', 'noforwards', 'deleted', 'deactivated', 'left', 'kicked'))):
+        policy['content_available'] = True
     if not policy['content_available']:
+        if policy['kind'] == 'channel' and policy['content_reason'] == SPONSORED:
+            raise IPCError('channel_refresh', 'Open this channel again before continuing. Its sponsored messages must be checked first.')
         raise IPCError('content_unavailable', policy['content_reason'])
     return entity
 

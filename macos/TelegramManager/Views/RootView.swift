@@ -48,6 +48,7 @@ struct RootView: View {
         .alert("Operation needs attention", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.dismissError() } })) {
             Button("OK") { model.dismissError() }
         } message: { Text(model.errorMessage ?? "") }
+        .sheet(item: $model.archiveTarget) { target in ArchiveWizard(model: model, target: target) }
         .sheet(item: $model.profileTarget) { profile in PeerProfileView(model: model, profile: profile) }
         .sheet(isPresented: $model.foldersPresented) { TelegramFoldersView(model: model) }
         .sheet(item: $model.mediaPreview, onDismiss: { model.closeMediaPreview() }) { preview in ImagePreviewView(model: model, context: preview) }
@@ -78,10 +79,10 @@ struct RootView: View {
                     if Screen.advanced.contains(model.screen) {
                         Section("Current tool") { Label(model.screen.rawValue, systemImage: model.screen.symbol).foregroundStyle(.secondary) }
                     }
-                    sidebarSection("App", screens: [.accounts, .settings])
+                    sidebarSection("App", screens: [.archives, .accounts, .settings])
                 }.listStyle(.sidebar).accessibilityIdentifier("workspaceSidebar").frame(maxHeight: .infinity)
                 VStack(alignment: .leading, spacing: 6) {
-                    Label(model.connected ? "Account connected" : model.backendOnline ? "Account not connected" : "Backend unavailable", systemImage: model.connected ? "checkmark.circle.fill" : "circle.dotted")
+                    Label(model.connected ? "Account connected" : model.backendOnline ? "Account not connected" : "Connection unavailable", systemImage: model.connected ? "checkmark.circle.fill" : "circle.dotted")
                         .font(.caption).foregroundStyle(model.connected ? .green : .secondary)
                     Text(model.activeProfile?.title ?? "Explicit account selection.").font(.caption2).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
@@ -110,6 +111,7 @@ struct RootView: View {
                     case .chats, .groupChats, .channels: ChatsView(model: model)
                     case .savedMessages: ChatsView(model: model, detailOnly: true)
                     case .advancedWorkspace: AdvancedWorkspaceView(model: model)
+                    case .archives: MediaArchivesView(model: model)
                     case .contacts: ContactsView(model: model)
                     case .accounts: AccountsView(model: model)
                     case .drafts: DraftsView(model: model)
@@ -312,7 +314,7 @@ struct RecoveryPanel: View {
         Button("Manage Accounts") { model.screen = .accounts }.disabled(model.busy)
             .accessibilityIdentifier("recoveryManageAccounts")
         Button("Connection Diagnostics") { model.openDiagnostics() }.disabled(model.busy)
-            .help("Open sanitized backend and connection diagnostics")
+            .help("Open connection details")
             .accessibilityIdentifier("openConnectionDiagnostics")
     }
 }

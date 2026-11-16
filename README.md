@@ -25,6 +25,16 @@
 > [!IMPORTANT]
 > **V3 · v0.4.0 · Development preview.** The native app and its backend compile and pass automated tests, but complete interactive UI acceptance is **not yet verified**. Builds currently depend on this repository's Python virtual environment. **No standalone installer or production-ready release is available.** See [validation evidence](docs/VALIDATION.md).
 
+## V4.1 Smart Media Archive
+
+Open a supported conversation and choose **Save Media** to save permitted media
+by date. Persistent jobs, verified duplicates, pause/resume and the native
+**Media Archives** dashboard retain progress across account changes and restarts.
+[MacBook setup and testing](docs/V4_1_SMART_ARCHIVE.md) ·
+[UX audit, screenshots and validation](docs/V4_1_UX_AUDIT.md).
+Channel availability depends on supported sponsored-message responses;
+unsupported formats remain blocked. Live Telegram acceptance remains unverified.
+
 ## V4 media development update
 
 This checkout adds native media viewing, bounded account-scoped transfers,

@@ -1,5 +1,11 @@
 # Native application IPC, protocol version 1
 
+V4.1 update: [Smart Media Archive](V4_1_SMART_ARCHIVE.md) and
+[UX audit/validation](V4_1_UX_AUDIT.md) define persistent archive jobs and the
+conditional sponsored-message channel gate. Older blanket channel/media limits
+below remain historical except where the current contracts retain them.
+
+
 V4 update: [native media contract](V4_MEDIA.md) supersedes the V3 media limits,
 viewer exclusions and blanket TTL refusal below for the dedicated V4 routes.
 Existing text/action restrictions and legacy preview contracts remain unchanged.

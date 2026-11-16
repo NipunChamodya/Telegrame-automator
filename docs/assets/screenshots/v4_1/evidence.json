@@ -1,0 +1,55 @@
+{
+  "date": "2026-11-16",
+  "live_telegram": false,
+  "captures": [
+    {
+      "file": "light/choose-media.png",
+      "width": 2520,
+      "height": 1640,
+      "sha256": "e3a0aa03ccadc8525d0b895293e7425faba147b33f0293742c53a45ab3b6e1cd",
+      "source": "XCUITest application window; synthetic fixtures; visually inspected"
+    },
+    {
+      "file": "light/review.png",
+      "width": 2520,
+      "height": 1640,
+      "sha256": "f7b05a4b945c170d7cc46f3c063f23bf4fcb30f1b95b58fbb5137606235f591d",
+      "source": "XCUITest application window; synthetic fixtures; visually inspected"
+    },
+    {
+      "file": "light/sponsored-text.png",
+      "width": 2520,
+      "height": 1640,
+      "sha256": "fb2f563ba8e5933f143008ad9083b75c32b103ef5db9a853eab00f568ba88d9d",
+      "source": "XCUITest application window; synthetic fixtures; visually inspected"
+    },
+    {
+      "file": "dark/saving.png",
+      "width": 2520,
+      "height": 1640,
+      "sha256": "f016a77b046404f31836170bb0f948b9f4debdb461a497fb954f089dc8f193ec",
+      "source": "XCUITest application window; synthetic fixtures; visually inspected"
+    },
+    {
+      "file": "dark/waiting.png",
+      "width": 2520,
+      "height": 1640,
+      "sha256": "bf888dc06cb1cac6aa8892adc6ca8ae9f538ce9dc03ec0cc4ab4f24b7031cc57",
+      "source": "XCUITest application window; synthetic fixtures; visually inspected"
+    },
+    {
+      "file": "dark/finished.png",
+      "width": 2520,
+      "height": 1640,
+      "sha256": "c0cabbc98049e793e10b5def6221d41f03469ce8a4c10f1039b20c84baf10552",
+      "source": "XCUITest application window; synthetic fixtures; visually inspected"
+    },
+    {
+      "file": "light/offline-conversation-navigation.png",
+      "width": 2520,
+      "height": 1640,
+      "sha256": "67cae1a6dbd570716894d1e194129e387e7b33a8ad061e7a0364ee2134074952",
+      "source": "Passing XCUITest search/pagination/selection; synthetic offline fixture; visually inspected"
+    }
+  ]
+}

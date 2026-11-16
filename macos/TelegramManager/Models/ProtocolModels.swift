@@ -65,7 +65,7 @@ struct BackendFailure: Error, LocalizedError, Sendable {
     let code: String
     let message: String
     var errorDescription: String? { message }
-    static let disconnected = BackendFailure(code: "backend_unavailable", message: "The backend is unavailable. Reconnect to restore the existing session; no delivery is retried.")
+    static let disconnected = BackendFailure(code: "backend_unavailable", message: "The connection is unavailable. Reconnect to continue. Your saved progress is safe.")
 }
 
 func safeDisplay(_ input: String) -> String {
@@ -135,7 +135,7 @@ struct ChatMessage: Identifiable, Equatable, Sendable {
 }
 
 extension ChatSummary {
-    var contentAvailable: Bool { data["content_available"].bool && kind != "channel" }
+    var contentAvailable: Bool { data["content_available"].bool && (kind != "channel" || data["sponsored_ready"].bool) }
     var contentReason: String {
         let reason = safeDisplay(data["content_reason"].string)
         return reason.isEmpty ? "Refresh conversations to verify whether this content is supported." : reason

@@ -94,7 +94,7 @@ class MediaTransfers:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def dispatch(self, request_id, method, p, generation):
+    async def dispatch(self, request_id, method, p, generation, *, on_publish=None, on_reserve=None, on_metadata=None):
         from .ipc import IPCError, fields, integer, string
 
         b = self.backend
@@ -166,6 +166,7 @@ class MediaTransfers:
             self.active[request_id] = entry
         self.tasks.add(task)
         temporary = None
+        parent_fd = None
         deadline_task = None
         try:
             async with b.lock:
@@ -183,6 +184,11 @@ class MediaTransfers:
                 message = await fetch_media_message(b.client, expected, peer, identity)
                 client = b.client
                 metadata = describe(message)
+                if on_metadata is not None:
+                    on_metadata(message)
+                from .sponsored import granted
+                if method == 'media.open' and granted(b.client, peer) and metadata['kind'] in {'video','animation'}:
+                    raise IPCError('preview_unavailable', 'Channel video preview is unavailable in this version. You can save ordinary media to watch in another application.')
                 b.store.db.execute(
                     "CREATE TABLE IF NOT EXISTS media_consumed (account INTEGER, peer INTEGER, message INTEGER, PRIMARY KEY(account, peer, message))"
                 )
@@ -272,14 +278,20 @@ class MediaTransfers:
                 "text/plain": "txt",
             }
             suffix = "." + extensions.get(metadata["mime_type"], "bin")
-            fd, name = tempfile.mkstemp(
-                prefix=".telegram-media-", suffix=suffix, dir=directory
-            )
+            if output is not None:
+                parent_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                leaf = '.telegram-media-' + secrets.token_hex(16) + suffix
+                fd = os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
+                name = str(directory / leaf)
+            else:
+                fd, name = tempfile.mkstemp(prefix=".telegram-media-", suffix=suffix, dir=directory)
             temporary = Path(name)
             info = os.fstat(fd)
             entry.update(path=temporary, identity=(info.st_dev, info.st_ino))
             digest = hashlib.sha256()
             with os.fdopen(fd, "wb") as stream:
+                if on_reserve is not None:
+                    on_reserve(temporary, entry['identity'])
                 if output is None:
                     self.cache.pending[name] = entry
                     self.cache.write_index()
@@ -312,7 +324,12 @@ class MediaTransfers:
                                     "file_size",
                                     "The attachment exceeded its declared size.",
                                 )
-                            stream.write(chunk)
+                            writer = asyncio.create_task(asyncio.to_thread(stream.write, chunk))
+                            try:
+                                await asyncio.shield(writer)
+                            except asyncio.CancelledError:
+                                await writer
+                                raise
                             digest.update(chunk)
                             entry["bytes"] += len(chunk)
                             b.emit(
@@ -397,7 +414,19 @@ class MediaTransfers:
                         "media_changed", "The attachment changed. Select it again."
                     )
                 if output:
-                    os.link(temporary, output)
+                    info = os.stat(temporary.name, dir_fd=parent_fd, follow_symlinks=False)
+                    if (info.st_dev, info.st_ino) != entry['identity']:
+                        raise IPCError('file_access', 'The destination changed. Choose the folder again.')
+                    if on_publish is not None:
+                        on_publish(size, digest.hexdigest())
+                    from .file_publication import publish
+                    publish(parent_fd, temporary.name, output.name)
+                    try:
+                        os.fsync(parent_fd)
+                    except OSError as exc:
+                        import errno
+                        if exc.errno not in {errno.EINVAL, errno.EOPNOTSUPP}:
+                            raise
                     return {
                         "saved": True,
                         "bytes": size,
@@ -464,17 +493,29 @@ class MediaTransfers:
                 deadline_task.cancel()
             self.tasks.discard(task)
             self.active.pop(request_id, None)
-            if temporary:
-                try:
-                    self.cache.unlink_owned(entry)
-                finally:
-                    for key, pending in tuple(self.cache.pending.items()):
-                        if pending.get("task") is task:
+            try:
+                if temporary:
+                    try:
+                        if parent_fd is not None:
                             try:
-                                self.cache.unlink_owned(pending)
-                                self.cache.pending.pop(key, None)
-                            except OSError as exc:
-                                logging.getLogger(__name__).warning(
-                                    "MediaCleanup:%s", type(exc).__name__
-                                )
-                    self.cache.write_index()
+                                info = os.stat(temporary.name, dir_fd=parent_fd, follow_symlinks=False)
+                                if (info.st_dev, info.st_ino) == entry['identity']:
+                                    os.unlink(temporary.name, dir_fd=parent_fd)
+                            except FileNotFoundError:
+                                pass
+                        else:
+                            self.cache.unlink_owned(entry)
+                    finally:
+                        for key, pending in tuple(self.cache.pending.items()):
+                            if pending.get("task") is task:
+                                try:
+                                    self.cache.unlink_owned(pending)
+                                    self.cache.pending.pop(key, None)
+                                except OSError as exc:
+                                    logging.getLogger(__name__).warning(
+                                        "MediaCleanup:%s", type(exc).__name__
+                                    )
+                        self.cache.write_index()
+            finally:
+                if parent_fd is not None:
+                    os.close(parent_fd)

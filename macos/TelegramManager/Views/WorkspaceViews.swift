@@ -54,6 +54,7 @@ struct ChatsView: View {
     @FocusState private var focusedField: Field?
     @State private var windowFocused = false
     @State private var historySize = CGSize.zero
+    @State private var adFrames: [String: CGRect] = [:]
     @State private var legacyVisibleIDs: Set<Int> = []
     private var automaticReadSupported: Bool { if #available(macOS 15.0, *) { return true }; return false }
     private var focusedChat: ChatSummary? {
@@ -120,7 +121,7 @@ struct ChatsView: View {
                         }
                     } label: { Label(model.chatKind == "all" ? "All conversations" : model.chatKind.capitalized, systemImage: "line.3.horizontal.decrease") }
                     Spacer()
-                    if model.chatsLoading { ProgressView().controlSize(.small).accessibilityLabel("Loading cached conversations") }
+                    if model.chatsLoading { ProgressView().controlSize(.small).accessibilityLabel("Loading conversations") }
                     Menu {
                         Button("Refresh Conversations") { model.refreshChats() }.disabled(!model.connected || model.busy)
                         Button("Telegram Folders…") { model.foldersPresented = true }
@@ -132,7 +133,9 @@ struct ChatsView: View {
             CachedReadStatus(model: model, screen: model.screen == .channels ? .channels : model.screen == .groupChats ? .groupChats : .chats, retry: { Task { await model.loadChats() } }).padding(.horizontal, 14)
             Divider()
             List(selection: Binding<Int?>(get: { focusedChat?.id }, set: { id in
-                if let id, let chat = model.chats.first(where: { $0.id == id }) { model.selectChat(chat); showConversation = true }
+                if let id, let chat = model.chats.first(where: { $0.id == id }) {
+                    Task { @MainActor in model.selectChat(chat); showConversation = true }
+                }
             })) {
                 ForEach(model.chats) { chat in
                     conversationRow(chat).tag(chat.id).accessibilityIdentifier("chatRow_\(chat.id)")
@@ -150,7 +153,7 @@ struct ChatsView: View {
             HStack {
                 Button { model.chatPage -= 1; Task { await model.loadChats() } } label: { Image(systemName: "chevron.left") }.disabled(model.chatPage == 0 || model.chatsLoading).help("Previous page").accessibilityLabel("Previous")
                 Spacer()
-                Text("\(model.chatTotal) cached · Page \(model.chatPage + 1)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text("\(model.chatTotal) \(model.chatTotal == 1 ? "conversation" : "conversations") · Page \(model.chatPage + 1)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
                 Button { model.chatPage += 1; Task { await model.loadChats() } } label: { Image(systemName: "chevron.right") }.disabled((model.chatPage + 1) * model.pageSize >= model.chatTotal || model.chatsLoading).help("Next page").accessibilityLabel("Next")
             }.padding(.horizontal, 14).padding(.vertical, 10).accessibilityIdentifier("conversationPagination")
@@ -181,15 +184,24 @@ struct ChatsView: View {
         }.padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()).help(chat.title)
     }
 
+    private func reportVisibleSponsors() {
+        guard windowFocused && NSApp.isActive else { return }
+        let viewport = CGRect(origin: .zero, size: historySize)
+        for (token, frame) in adFrames where frame.height > 0 && viewport.contains(frame) { model.sponsorVisible(token) }
+    }
+
     @ViewBuilder private func conversationDetail(height: CGFloat, compact: Bool) -> some View {
         if let chat = focusedChat, !chat.contentAvailable {
             VStack(alignment: .leading, spacing: 18) {
                 if compact { Button { showConversation = false } label: { Label("Conversations", systemImage: "chevron.left") }.accessibilityIdentifier("backToConversations") }
-                PageHeader(title: chat.title, subtitle: "Cached identity", symbol: "info.bubble")
-                LabeledContent("Telegram ID", value: String(chat.id)).textSelection(.enabled)
-                LabeledContent("Username", value: chat.data["username"].string.isEmpty ? "Unavailable" : "@" + chat.data["username"].string)
+                PageHeader(title: chat.title, subtitle: "Conversation unavailable", symbol: "info.bubble")
+                DisclosureGroup("Conversation details") {
+                    LabeledContent("Telegram ID", value: String(chat.id)).textSelection(.enabled)
+                    LabeledContent("Username", value: chat.data["username"].string.isEmpty ? "Unavailable" : "@" + chat.data["username"].string)
+                }
                 Label(chat.contentReason, systemImage: "info.circle").foregroundStyle(.secondary)
-                Text("Cached identity only. Refresh conversations to update supported metadata; unavailable content is not requested.").font(.caption).foregroundStyle(.secondary)
+                if let error = model.messagesError { Text(error).foregroundStyle(.secondary) }
+                Text("This conversation is not available for reading or saving media right now.").font(.caption).foregroundStyle(.secondary)
                 Button("Refresh Conversations") { model.refreshChats() }.disabled(!model.connected || model.busy)
                 Spacer()
             }.padding(22).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).accessibilityIdentifier("channelMetadataOnly")
@@ -202,13 +214,15 @@ struct ChatsView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(chat.title).font(.title3.weight(.semibold)).lineLimit(2).textSelection(.enabled)
-                            Text("\(chat.kind.capitalized) · \(chat.id) · Account \(model.accountID)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            Text("\(chat.kind.capitalized) · \(model.activeProfile?.title ?? "Selected account")").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                             if !model.typingDescription.isEmpty { Text(model.typingDescription).font(.caption).foregroundStyle(.tint) }
                         }
                         Spacer()
-                        Button { model.showProfile(chat.id) } label: { Image(systemName: "person.crop.circle") }.disabled(!model.connected || model.busy).help("View profile")
+                        Button("Save Media", systemImage: "square.and.arrow.down") { model.beginArchive() }
+                            .disabled(!model.connected).help("Save media from this conversation").accessibilityIdentifier("saveConversationMedia")
+                        Button { model.showProfile(chat.id) } label: { Image(systemName: "person.crop.circle") }.disabled(!model.connected || model.busy).help("View profile").accessibilityLabel("View profile")
                         if model.messagesLoading { ProgressView().controlSize(.small).accessibilityLabel("Loading messages") }
-                        Button { Task { await model.loadMessages() } } label: { Image(systemName: "arrow.clockwise") }.disabled(!model.connected || model.busy || model.messagesLoading).help("Refresh messages")
+                        Button { Task { await model.loadMessages() } } label: { Image(systemName: "arrow.clockwise") }.disabled(!model.connected || model.busy || model.messagesLoading).help("Refresh messages").accessibilityLabel("Refresh messages")
                     }
                     HStack(spacing: 8) {
                         TextField("Search Telegram messages", text: $messageSearch).textFieldStyle(.roundedBorder).onSubmit { if !model.messagesLoading { Task { await model.loadMessages(search: messageSearch) } } }
@@ -226,10 +240,16 @@ struct ChatsView: View {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         if model.hasMoreMessages { Button("Load Older Messages") { Task { await model.loadMessages(older: true) } }.disabled(!model.connected || model.busy || model.messagesLoading).frame(maxWidth: .infinity) }
                         ForEach(model.chatMessages.sorted { $0.id < $1.id }) { message in observedMessageRow(message, chat: chat) }
+                        ForEach(Array(model.sponsoredAds.enumerated()), id: \.offset) { _, ad in SponsoredCard(model: model, ad: ad) }
 
                     }.padding(16).frame(maxWidth: .infinity)
                 }.coordinateSpace(name: "conversationHistoryViewport")
                 .background(GeometryReader { geometry in Color.clear.onAppear { historySize = geometry.size }.onChange(of: geometry.size) { _, size in historySize = size } })
+                .onPreferenceChange(SponsoredFramePreference.self) { frames in
+                    adFrames = frames
+                    reportVisibleSponsors()
+                }
+                .onChange(of: windowFocused) { _, focused in if focused { reportVisibleSponsors() } }
                 .onPreferenceChange(MessageFramePreference.self) { frames in
                     guard !automaticReadSupported else { return }
                     let viewport = CGRect(origin: .zero, size: historySize)
@@ -246,7 +266,7 @@ struct ChatsView: View {
                             ErrorStateView(title: "Messages could not be loaded", message: error, retry: model.connected ? { Task { await model.loadMessages() } } : nil)
                                 .accessibilityIdentifier("messagesError")
                         } else {
-                            EmptyStateView(title: model.connected ? "No messages in this view" : "Connect to load messages", symbol: "bubble.left", description: model.connected ? "Refresh this conversation or change your search. Unsupported content remains unavailable." : "Cached identity is available offline. Restore this account’s session to retrieve supported history.", actionTitle: model.connected ? "Refresh Messages" : nil, action: model.connected ? { Task { await model.loadMessages() } } : nil)
+                            EmptyStateView(title: model.connected ? "No messages in this view" : "Connect to load messages", symbol: "bubble.left", description: model.connected ? "Refresh this conversation or change your search. Unsupported content remains unavailable." : "Saved conversation details are available. Connect to load messages.", actionTitle: model.connected ? "Refresh Messages" : nil, action: model.connected ? { Task { await model.loadMessages() } } : nil)
                         }
                     }
                 }

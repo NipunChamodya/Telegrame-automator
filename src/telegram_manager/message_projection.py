@@ -84,6 +84,8 @@ def normalize_message(message, account: int | None = None, kind: str | None = No
     if file is not None:
         from .media_policy import describe
         media = describe(message)
+        if kind == 'channel' and media['kind'] in {'video','animation'}:
+            media['can_open'] = False
     reply = getattr(message, 'reply_to', None)
     reply_peer = getattr(reply, 'reply_to_peer_id', None)
     reactions = []

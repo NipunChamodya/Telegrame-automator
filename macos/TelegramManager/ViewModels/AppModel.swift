@@ -5,6 +5,7 @@ import AppKit
 import UserNotifications
 
 enum Screen: String, CaseIterable, Identifiable {
+    case archives = "Media Archives"
     case contacts = "Contacts"
     case chats = "Chats", groupChats = "Groups", channels = "Channels", savedMessages = "Saved Messages", advancedWorkspace = "Advanced Workspace"
     case messageOperations = "Message Actions"
@@ -29,6 +30,7 @@ enum Screen: String, CaseIterable, Identifiable {
         case .destinations: return "checkmark.seal"
         case .history: return "clock.arrow.circlepath"
         case .messageOperations: return "pencil.and.list.clipboard"
+        case .archives: return "archivebox"
         case .settings: return "gearshape"
         }
     }
@@ -38,6 +40,14 @@ enum Screen: String, CaseIterable, Identifiable {
     let backend: BackendClient
     init(backend: BackendClient = BackendClient()) { self.backend = backend }
     @Published var screen: Screen = .chats
+    @Published var archiveTarget: ArchiveTarget?
+    @Published var archiveJobs: [ArchiveJob] = []
+    @Published var archiveError: String?
+    @Published var sponsoredAds: [JSONValue] = []
+    private var preparedChannelID: Int?
+    private var sponsoredSeen: Set<String> = []
+    private var channelTask: Task<Void, Never>?
+    private var channelExpiryTask: Task<Void, Never>?
     @Published var status: JSONValue = .object([:])
     @Published var settings: JSONValue = .object([:])
     @Published var groups: [TelegramGroup] = []
@@ -200,7 +210,7 @@ enum Screen: String, CaseIterable, Identifiable {
     var connectionTitle: String {
         if isConnecting { return "Connecting" }
         if connectionFailureCode == "already_running" { return "Another instance is running" }
-        if !backendOnline { return "Backend unavailable" }
+        if !backendOnline { return "Connection unavailable" }
         if status["cooldown_until"].doubleValue > Date().timeIntervalSince1970 { return "Telegram cooldown active" }
         if ["credentials", "phone", "code", "password", "bind_account"].contains(authStage)
             || ["credentials", "phone", "code", "password", "bind_account"].contains(status["auth_stage"].string) { return "Telegram authentication required" }
@@ -215,15 +225,15 @@ enum Screen: String, CaseIterable, Identifiable {
         return connected ? "checkmark.circle.fill" : "bolt.slash.circle"
     }
     var connectionExplanation: String {
-        if isConnecting { return "Starting one managed backend and checking the saved session. You can cancel this attempt." }
+        if isConnecting { return "Connecting to your saved account. You can cancel this attempt." }
         if connectionFailureCode == "already_running" {
             return "Another process holds this installation’s exclusive lock. Close the other CLI or desktop instance, then retry. A leftover lock file alone does not cause this conflict; do not delete it."
         }
-        if !backendOnline { return "The local Python backend is not ready. Retry once to restart only this app’s managed child, or view diagnostics for runtime and ownership guidance. Your editor text and saved records are retained." }
+        if !backendOnline { return "The connection could not be started. Choose Retry Connection or view Connection Details for help. Your drafts and saved files are safe." }
         if status["cooldown_until"].doubleValue > Date().timeIntervalSince1970 { return "Telegram requested a wait. Saved progress is retained; resume explicitly after the displayed deadline." }
         if connectionTitle == "Telegram authentication required" { return "Complete the secure login steps for the selected account. No discovery or messages are sent during authentication." }
         if connectionFailureCode == "io" && !connected { return "The connection was interrupted. Reconnect explicitly; uncertain deliveries are never replayed." }
-        return connected ? "The selected Telegram account is ready. Network operations and sends remain explicit." : "The backend is ready and cached data is available. Connect to restore this account’s Telegram authorization."
+        return connected ? "You’re connected. Choose a conversation to get started." : "Your saved conversations are available. Connect to load new messages and save media."
     }
     var connectionActionAvailable: Bool {
         !busy && !isConnecting && !shuttingDown && status["cooldown_until"].doubleValue <= Date().timeIntervalSince1970
@@ -281,7 +291,7 @@ enum Screen: String, CaseIterable, Identifiable {
                 if self.connected { Task { await self.ensureLiveUpdates(peer: self.selectedChat?.contentAvailable == true ? self.selectedChat?.id : nil) } }
             }
             await backend.setEventHandler { [weak self] event in Task { @MainActor [weak self] in self?.handle(event) } }
-            await run("Starting backend") {
+            await run("Connecting") {
                 try await self.backend.start()
                 _ = try await self.backend.request("health")
                 self.backendOnline = true
@@ -365,6 +375,12 @@ enum Screen: String, CaseIterable, Identifiable {
         if data["account_generation"] != .null && data["account_generation"].int != status["account_generation"].int { return }
         if ["chat.changed", "message.changed", "message.deleted", "read.changed", "typing.changed", "sync.required"].contains(event["event"].string) {
             consumeLiveEvent(event)
+            return
+        }
+        if event["event"].string == "archive.changed" {
+            let job = ArchiveJob(data: data["job"])
+            archiveJobs.removeAll { $0.id == job.id }; archiveJobs.insert(job, at: 0)
+            if archiveJobs.count > 100 { archiveJobs.removeLast() }
             return
         }
         if event["event"].string == "media.expired" {
@@ -618,6 +634,7 @@ enum Screen: String, CaseIterable, Identifiable {
     func shutdown() async {
         guard !isUIFixture else { return }
         shuttingDown = true
+        channelTask?.cancel(); channelExpiryTask?.cancel()
         queryTask?.cancel(); chatListTask?.cancel(); operationTask?.cancel(); conversationTask?.cancel()
         await operationTask?.value
         await flushAutosaves()
@@ -648,6 +665,8 @@ extension AppModel {
     }
     private func clearAccountContext() {
         resetLiveState()
+        channelTask?.cancel(); channelExpiryTask?.cancel(); preparedChannelID = nil; sponsoredAds = []; sponsoredSeen = []
+        archiveTarget = nil; archiveJobs = []; archiveError = nil
         accountEpoch += 1
         queryTask?.cancel(); chatListTask?.cancel(); conversationTask?.cancel()
         chatListRevision += 1; messageListRevision += 1
@@ -794,6 +813,12 @@ extension AppModel {
     func selectChat(_ chat: ChatSummary) {
         guard !busy || operation == "Opening Saved Messages" else { return }
         guard selectedChat?.id != chat.id else { return }
+        var chat = chat
+        if chat.kind == "channel", connected, !isUIFixture, preparedChannelID != chat.id {
+            var fields = chat.data.object; fields["content_available"] = .bool(false); fields["sponsored_ready"] = .bool(false)
+            chat = ChatSummary(data: .object(fields))
+        }
+        preparedChannelID = nil
         let recoveryKey = draftRecoveryKey(chat.id)
         let previousKey = selectedChat.map { draftRecoveryKey($0.id) }
         if let previousKey, chatDraft != savedChatMessage {
@@ -813,9 +838,11 @@ extension AppModel {
         conversationTask?.cancel(); conversationRevision += 1
         invalidateChatPreview()
         let revision = conversationRevision, epoch = accountEpoch
+        channelTask?.cancel(); channelExpiryTask?.cancel(); sponsoredAds = []; sponsoredSeen = []
         selectedChat = chat; chatMessages = []; chatDraft = draftRecovery[recoveryKey] ?? ""; savedChatMessage = ""; chatDraftSaved = ""; chatReply = nil; hasMoreMessages = false
         activeMessageSearch = ""; messageListRevision += 1; messagesLoading = false; messagesError = nil
         if !chat.contentAvailable {
+            if chat.kind == "channel" && connected && !isUIFixture { prepareChannel(chat) }
             if let previous, !isUIFixture {
                 conversationTask = Task {
                     do {
@@ -990,7 +1017,7 @@ extension AppModel {
 extension AppModel {
     private func loadUIFixture() {
         backendOnline = true
-        status = .object(["connected": .bool(false), "profile_id": .string("fixture"), "bound_account_id": .integer(101), "account": .object(["id": .integer(101), "display_name": .string("Example Account")]), "overview": .object(["total": .integer(3), "allowed": .integer(1), "denied": .integer(1), "unknown": .integer(1), "pending": .integer(1)])])
+        status = .object(["connected": .bool(false), "account_generation": .integer(0), "profile_id": .string("fixture"), "bound_account_id": .integer(101), "account": .object(["id": .integer(101), "display_name": .string("Example Account")]), "overview": .object(["total": .integer(3), "allowed": .integer(1), "denied": .integer(1), "unknown": .integer(1), "pending": .integer(1)])])
         profiles = [AccountProfile(data: .object(["profile_id": .string("fixture"), "label": .string("Example Account"), "telegram_id": .integer(101), "is_active": .bool(true), "legacy": .bool(true), "auth_state": .string("disconnected")])), AccountProfile(data: .object(["profile_id": .string("fixture-second"), "label": .string("Second Example Account"), "telegram_id": .integer(102), "is_active": .bool(false), "auth_state": .string("disconnected")]))]
         groups = ["ශ්‍රී ලංකා Community 👩‍💻", "தமிழ் Developers", "Engineering Discussion"].enumerated().map { index, title in
             TelegramGroup(data: .object(["id": .integer(-1001 - index), "name": .string(title), "title": .string(title), "kind": .string("supergroup"), "effective_permission": .string(["allowed", "denied", "unknown"][index])]))
@@ -1059,9 +1086,30 @@ extension AppModel {
             mediaPreview = MediaPreviewContext(scope: UpdateScope(profileID: "fixture", accountID: 101, generation: 0), token: "fixture-video", peerID: 202, messageID: 1, bytes: 2048, mimeType: "video/mp4", path: videoPath, kind: "video")
             heldMediaPreview = mediaPreview
         }
+        if fixtureEnvironment["TGM_UI_ARCHIVE"] == "wizard", let chat = selectedChat, let scope = currentUpdateScope {
+            archiveTarget = ArchiveTarget(scope: scope, chat: chat)
+        }
+        if fixtureEnvironment["TGM_UI_ARCHIVE"] == "dashboard" {
+            screen = .archives
+            archiveJobs = [ArchiveJob(data: .object(["id": .string("fixture-archive"), "conversation": .string("Family Photos · தமிழ்"), "state": .string(fixtureEnvironment["TGM_UI_ARCHIVE_STATE"] ?? "finding"), "discovered": .integer(247), "completed": .integer(182), "duplicates": .integer(30), "restricted": .integer(4), "unsupported": .integer(2), "deleted": .integer(1), "failed": .integer(3), "bytes": .integer(64000000), "examined": .integer(2400), "folder": .string(FileManager.default.temporaryDirectory.path), "note": .string("Protected media stays in Telegram. Your saved files are safe.")]))]
+        }
+        if fixtureEnvironment["TGM_UI_ARCHIVE_STATE"] == "finished", let job = archiveJobs.first {
+            var value = job.data.object; value["failed"] = .integer(0); value["discovered"] = .integer(219)
+            value["note"] = .string("Finished. Protected, unsupported and deleted items were skipped.")
+            archiveJobs = [ArchiveJob(data: .object(value))]
+        }
+        if fixtureEnvironment["TGM_UI_ARCHIVE_STATE"] == "waiting", let job = archiveJobs.first {
+            var value = job.data.object; value["wait_until"] = .number(Date().timeIntervalSince1970 + 90)
+            value["note"] = .string("Telegram asked for a wait. Resume when the timer ends.")
+            archiveJobs = [ArchiveJob(data: .object(value))]
+        }
+        if fixtureEnvironment["TGM_UI_SPONSORED"] == "1" {
+            chatMessages = Array(fixtureMessageSource.prefix(1))
+            sponsoredAds = [.object(["token": .string("synthetic-ad"), "label": .string("Sponsored"), "title": .string("Synthetic sponsor"), "text": .string("A synthetic sponsored-message presentation. No network request is made."), "button": .string("Learn More"), "info": .string("Synthetic sponsor information"), "can_report": .bool(true)])]
+        }
         if fixtureEnvironment["TGM_UI_INSPECTOR"] == "1" { detail = groups.first; selectedGroup = groups.first?.id }
         if let stage = fixtureEnvironment["TGM_UI_AUTH_STAGE"], ["credentials", "phone", "code", "password", "bind_account"].contains(stage) { authStage = stage; authAccount = 101 }
-        if fixtureEnvironment["TGM_UI_ERROR"] == "1" { errorMessage = "The backend could not be started. Existing local data was preserved. This is a synthetic error state." }
+        if fixtureEnvironment["TGM_UI_ERROR"] == "1" { errorMessage = "The connection could not be started. Existing local data was preserved. This is a synthetic error state." }
 
     }
 }
@@ -1568,5 +1616,101 @@ extension AppModel {
         guard let preview = mediaPreview, preview.canSave, preview.scope == currentUpdateScope,
               let message = chatMessages.first(where: { $0.id == preview.messageID }), message.contentAvailable else { return }
         downloadAttachment(message)
+    }
+}
+
+
+extension AppModel {
+    func beginArchive() {
+        guard let chat = selectedChat, chat.contentAvailable, let scope = currentUpdateScope, connected else { return }
+        archiveTarget = ArchiveTarget(scope: scope, chat: chat)
+    }
+    func createArchive(_ target: ArchiveTarget, draft: ArchiveDraft) async throws {
+        guard target.scope == currentUpdateScope, draft.valid, let folder = draft.folder else { throw BackendFailure(code: "account_changed", message: "The account changed. Open Save Media again.") }
+        if isUIFixture {
+            archiveJobs = [ArchiveJob(data: .object(["id": .string("fixture-started"), "conversation": .string(target.chat.title), "state": .string("finding"), "folder": .string(folder.path)]))]
+            archiveTarget = nil; screen = .archives; return
+        }
+        let dates = draft.bounds()
+        let result = try await backend.request("archive.create", params: ["account_id": .integer(target.scope.accountID), "destination": .integer(target.chat.id), "types": .array(draft.types.sorted().map(JSONValue.string)), "start": .integer(dates.0), "end": .integer(dates.1), "timezone": .string(TimeZone.current.identifier), "folder": .string(folder.path), "organization": .string(draft.organization)])
+        guard target.scope == currentUpdateScope else { return }
+        archiveJobs.insert(ArchiveJob(data: result["job"]), at: 0)
+        archiveTarget = nil; screen = .archives
+    }
+    private var archiveAccountScope: UpdateScope? {
+        guard backendOnline, accountID > 0, !activeProfileID.isEmpty else { return nil }
+        return UpdateScope(profileID: activeProfileID, accountID: accountID, generation: status["account_generation"].int)
+    }
+    func loadArchives() async {
+        guard !isUIFixture, let scope = archiveAccountScope else { return }
+        do {
+            let result = try await backend.request("archive.list", params: ["account_id": .integer(scope.accountID)])
+            guard scope == archiveAccountScope else { return }
+            archiveJobs = result["jobs"].array.map(ArchiveJob.init); archiveError = nil
+        } catch is CancellationError { } catch { if scope == archiveAccountScope { archiveError = "Saved archive progress could not be loaded. Try again." } }
+    }
+    func archiveControl(_ method: String, job: ArchiveJob) {
+        if isUIFixture {
+            var value = job.data.object
+            value["state"] = .string(method == "archive.pause" ? "paused" : method == "archive.cancel" ? "cancelled" : "saving")
+            archiveJobs = archiveJobs.map { $0.id == job.id ? ArchiveJob(data: .object(value)) : $0 }
+            return
+        }
+        guard let scope = archiveAccountScope else { return }
+        Task {
+            do {
+                _ = try await backend.request(method, params: ["account_id": .integer(scope.accountID), "job_id": .string(job.id)])
+                guard scope == archiveAccountScope else { return }
+                await loadArchives()
+            } catch { if scope == archiveAccountScope { archiveError = error.localizedDescription } }
+        }
+    }
+    private func prepareChannel(_ chat: ChatSummary) {
+        guard let scope = currentUpdateScope else { return }
+        channelTask = Task {
+            do {
+                let result = try await backend.request("sponsored.open", params: ["account_id": .integer(scope.accountID), "destination": .integer(chat.id)])
+                guard scope == currentUpdateScope, selectedChat?.id == chat.id, !Task.isCancelled else { return }
+                let ready = ChatSummary(data: result["chat"])
+                selectedChat = nil
+                preparedChannelID = ready.id
+                selectChat(ready)
+                sponsoredAds = result["ads"].array
+                channelExpiryTask = Task {
+                    do { try await Task.sleep(for: .seconds(295)) } catch { return }
+                    guard scope == currentUpdateScope, selectedChat?.id == chat.id else { return }
+                    closeMediaPreview(); chatMessages = []; sponsoredAds = []
+                    selectedChat = chat
+                    if Screen.messaging.contains(screen) { prepareChannel(chat) }
+                }
+            } catch {
+                if scope == currentUpdateScope, selectedChat?.id == chat.id { messagesError = error.localizedDescription }
+            }
+        }
+    }
+    func sponsorVisible(_ token: String) {
+        guard !isUIFixture else { return }
+        guard NSApp.isActive, let scope = currentUpdateScope, !sponsoredSeen.contains(token) else { return }
+        sponsoredSeen.insert(token)
+        Task {
+            do { _ = try await backend.request("sponsored.view", params: ["account_id": .integer(scope.accountID), "token": .string(token)]) }
+            catch { sponsoredSeen.remove(token) }
+        }
+    }
+    func openSponsor(_ ad: JSONValue) {
+        guard !isUIFixture else { return }
+        guard let scope = currentUpdateScope else { return }
+        Task {
+            do {
+                let result = try await backend.request("sponsored.click", params: ["account_id": .integer(scope.accountID), "token": .string(ad["token"].string)])
+                guard scope == currentUpdateScope, let url = URL(string: result["url"].string), url.scheme == "https" else { return }
+                NSWorkspace.shared.open(url)
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+    func reportSponsor(_ ad: JSONValue, option: String) async throws -> JSONValue {
+        if isUIFixture { return option.isEmpty ? .object(["title": .string("Report sponsored message"), "options": .array([.object(["id": .string("synthetic-spam"), "title": .string("Spam")])])]) : .object(["reported": .bool(true)]) }
+        guard let scope = currentUpdateScope else { throw BackendFailure.disconnected }
+        return try await backend.request("sponsored.report", params: ["account_id": .integer(scope.accountID), "token": .string(ad["token"].string), "option": .string(option)])
     }
 }

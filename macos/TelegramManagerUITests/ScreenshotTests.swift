@@ -93,28 +93,30 @@ final class ScreenshotTests: XCTestCase {
     func testConversationListGeometrySearchPaginationAndSelection() {
         continueAfterFailure = false
         let app = launch(["TGM_UI_SCREEN": "Chats", "TGM_UI_NO_SELECTION": "1", "TGM_UI_SIZE": "standard"])
-        let list = app.descendants(matching: .any)["conversationList"].firstMatch
+        let list = app.scrollViews.containing(.outline, identifier: "workspaceContent").firstMatch
         XCTAssertTrue(list.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(list.frame.height, app.windows.firstMatch.frame.height * 0.45, "Conversation list must use available vertical space")
         XCTAssertGreaterThanOrEqual(list.frame.width, 250)
-        let search = app.textFields["conversationSearch"]
+        let search = app.textFields["Search conversations"]
         XCTAssertTrue(search.exists)
         search.click(); search.typeText("example_198")
-        XCTAssertTrue(app.staticTexts["1 cached · Page 1"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["1 conversation · Page 1"].waitForExistence(timeout: 5))
         search.typeKey("a", modifierFlags: .command); search.typeKey(XCUIKeyboardKey.delete, modifierFlags: [])
-        XCTAssertTrue(app.staticTexts["198 cached · Page 1"].waitForExistence(timeout: 5))
-        let pagination = app.descendants(matching: .any)["conversationPagination"].firstMatch
+        XCTAssertTrue(app.staticTexts["198 conversations · Page 1"].waitForExistence(timeout: 5))
+        let pagination = app.staticTexts["198 conversations · Page 1"]
         XCTAssertTrue(pagination.waitForExistence(timeout: 5))
         XCTAssertGreaterThanOrEqual(pagination.frame.minY, list.frame.maxY - 2, "Pagination must remain below the list")
         XCTAssertLessThanOrEqual(pagination.frame.maxY, app.windows.firstMatch.frame.maxY)
-        let next = pagination.buttons["Next"]
+        let next = app.buttons["Next"]
         XCTAssertTrue(next.exists); XCTAssertTrue(next.isEnabled)
         next.click()
         let row = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "chatRow_")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5)); row.click()
-        let detail = app.descendants(matching: .any)["conversationDetail"].firstMatch
-        XCTAssertTrue(detail.waitForExistence(timeout: 5))
-        XCTAssertGreaterThan(detail.frame.height, 220)
+        XCTAssertTrue(app.buttons["Save Media"].waitForExistence(timeout: 5))
+        let detailHeight = app.scrollViews.allElementsBoundByIndex
+            .filter { $0.frame.minX >= list.frame.maxX - 2 }
+            .map { $0.frame.height }.max() ?? 0
+        XCTAssertGreaterThan(detailHeight, 220)
         capture("conversation-list-filled", app: app)
         app.terminate()
     }
@@ -297,6 +299,59 @@ extension ScreenshotTests {
         XCTAssertTrue(app.descendants(matching: .any)["imagePreviewSheet"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.checkBoxes["play/pause"].firstMatch.waitForExistence(timeout: 10))
         capture("native-video-player", app: app)
+        app.terminate()
+    }
+
+    func testSmartArchiveWizardAndDashboard() {
+        continueAfterFailure = false
+        let app = launch(["TGM_UI_CONNECTED": "1", "TGM_UI_ARCHIVE": "wizard"])
+        XCTAssertTrue(app.descendants(matching: .any)["archiveWizard"].waitForExistence(timeout: 5))
+        capture("archive-choose-media", app: app)
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: [])
+        capture("archive-date-range", app: app)
+        app.buttons["Continue"].click()
+        app.buttons["Choose Folder…"].click()
+        app.buttons["Continue"].click()
+        capture("archive-organization", app: app)
+        app.buttons["Continue"].click()
+        XCTAssertTrue(app.staticTexts["Calculated while finding media"].exists)
+        capture("archive-review", app: app)
+        app.buttons["Start Saving"].click()
+        XCTAssertTrue(app.buttons["Pause"].waitForExistence(timeout: 5))
+        app.buttons["Pause"].click()
+        XCTAssertTrue(app.buttons["Resume"].exists)
+        capture("archive-paused", app: app)
+        app.buttons["Resume"].click()
+        XCTAssertTrue(app.buttons["Pause"].exists)
+        app.buttons["Cancel"].firstMatch.click()
+        capture("archive-cancelled", app: app)
+        app.terminate()
+    }
+    func testArchiveDashboardAndConversationAvailability() {
+        continueAfterFailure = false
+        var app = launch(["TGM_UI_CONNECTED": "1"])
+        XCTAssertTrue(app.buttons["Save Media"].waitForExistence(timeout: 5))
+        capture("conversation-save-media", app: app)
+        app.terminate()
+        for state in ["finding", "saving", "waiting", "attention", "finished"] {
+            app = launch(["TGM_UI_CONNECTED": "1", "TGM_UI_ARCHIVE": "dashboard", "TGM_UI_ARCHIVE_STATE": state, "TGM_UI_APPEARANCE": "dark"])
+            XCTAssertTrue(app.staticTexts["Family Photos · தமிழ்"].waitForExistence(timeout: 5))
+            capture("archive-" + state, app: app)
+            app.terminate()
+        }
+    }
+
+    func testSponsoredPresentationAndSafeLinkConfirmation() {
+        continueAfterFailure = false
+        let app = launch(["TGM_UI_CONNECTED": "1", "TGM_UI_SPONSORED": "1"])
+        XCTAssertTrue(app.staticTexts["Synthetic sponsor"].waitForExistence(timeout: 5))
+        capture("sponsored-text-presentation", app: app)
+        app.buttons["Learn More"].click()
+        XCTAssertTrue(app.buttons["Open Website"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].firstMatch.click()
+        app.buttons["Report"].click()
+        XCTAssertTrue(app.buttons["Spam"].waitForExistence(timeout: 5))
+        app.buttons["Spam"].click()
         app.terminate()
     }
 }

@@ -372,3 +372,45 @@ class MediaV4Tests(TemporaryBackendTests):
         self.assertEqual(metadata["category"], "secret_chat")
         self.assertFalse(metadata["can_open"])
         self.assertFalse(metadata["can_download"])
+
+    async def test_exclusive_native_rename_fallback_preserves_non_overwrite(self):
+        import errno
+        import sys
+        from unittest.mock import patch
+
+        if sys.platform != "darwin":
+            self.skipTest("macOS exclusive rename")
+        with patch(
+            "telegram_manager.file_publication.os.link",
+            side_effect=OSError(errno.EOPNOTSUPP, "synthetic volume"),
+        ):
+            result = await self.call()
+        self.assertTrue(result["saved"])
+        self.assertEqual((self.root / "export.png").read_bytes(), PNG)
+        self.assertEqual(list(self.root.glob(".telegram-media-*")), [])
+
+    async def test_export_directory_descriptor_closes_on_permission_failure(self):
+        import os
+        from unittest.mock import patch
+
+        descriptors = []
+        real_open = os.open
+
+        def capture(path, flags, *args, **kwargs):
+            descriptor = real_open(path, flags, *args, **kwargs)
+            if flags & os.O_DIRECTORY:
+                descriptors.append(descriptor)
+            return descriptor
+
+        with (
+            patch("telegram_manager.media_transfers.os.open", side_effect=capture),
+            patch(
+                "telegram_manager.media_transfers.os.fsync",
+                side_effect=PermissionError("synthetic"),
+            ),
+            self.assertRaises(PermissionError),
+        ):
+            await self.call()
+        for descriptor in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
